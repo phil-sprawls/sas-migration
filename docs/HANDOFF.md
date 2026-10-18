@@ -104,13 +104,18 @@ This document says what was built and what it has proved, how to test it in your
 
 | Gap | Impact | Workaround today | Roadmap ([ARCHITECTURE.md](ARCHITECTURE.md) §9) |
 |---|---|---|---|
-| **Steps that need one global row order run in a single partition.** `LAG`/`_N_`/`RETAIN` without BY groups, and `_sas_seq` order, use windows with no partition. | Slow or failing on large tables | Not measured. **Test with production volumes (T9).** | new: partition-friendly ordering |
+| **Steps that need one global row order run in a single partition.** `LAG`/`_N_`/`RETAIN` without BY groups, and `_sas_seq` order, use windows with no partition. | Slow or failing on large tables | Not measured. **Test with production volumes (T9).** | 14 |
+| Every step's result is kept in memory (`ctx.cut`, `localCheckpoint`), like SAS writing WORK | Memory pressure on large data; a lost worker fails the job | Not measured: T9 | 14 |
+| `CALL SYMPUT` with a different macro-variable name per row collects every row to the driver | Slow or failing when that table is large | Usually small (lookup tables); check in review | 14 |
 | No BY-sort check: SAS stops when a `MERGE … BY` input is unsorted, but the converted code carries on | Silent wrong results possible if an input is unsorted | Keep `PROC SORT` before merges (as SAS requires) | 8 |
 | spark-sas7bdat is Scala 2.12 only | Works on Spark 3.x / Runtime ≤ 16.x classic compute only, and serverless cannot load JARs | Ingest on Runtime ≤ 16.x or on a workstation, then `publish`; or read with pyreadstat | rebuild for Scala 2.13 |
 | Python UDFs (four runtime functions: `BEST.`, `PUT`/`INPUT` with formats not compiled to SQL, `TINV`) | Slower than SQL; failed over Connect on Free Edition | Validate those cases `--as-job` | 9: SQL `BEST.` and formats |
 | Filter parameters inside `OR`/joins, column lists in PROC MEANS/FREQ, run-time table names | Marked unsupported, never guessed | LLM or manual | 6 |
 | No SAS capture kit, step-by-step fault localisation or HTML review page | Reviewers read JSON evidence | `sas2dbx runs`, evidence JSON, notebook header table | 11 |
 | No Asset Bundle deployment template | Manual job setup | Deploy notebooks with the Databricks CLI | 10 |
+| Shared SAS format catalogs (`.sas7bcat`, `OPTIONS FMTSEARCH=`) are not read; formats defined in the program are | Formats from a catalog are unknown to the converter | Export the catalog on SAS (`PROC FORMAT CNTLOUT=`) as `PROC FORMAT` code the program includes | 13 |
+| `validate` runs cases one at a time in one process; an unexpected error stops the run, and there is no per-case time limit | Unattended batches of hundreds of programs stall or stop | Smaller batches; job mode for parallel runs | 12 |
+| `validate --llm` runs on local Spark or through Databricks Connect, not with `--as-job` | LLM-written steps are not run in the deployed notebook form | Review the saved notebook, then deploy it with the Databricks CLI | new |
 | The parameter notebook is a soft gate: `%run` executes it as code | A user with edit rights can run code with the job's identity | Use job parameters (`--param`) where users must not run code | 6: hard gate |
 
 ---
@@ -182,6 +187,9 @@ Shared ("standard") access mode does not expose the JVM that the reader's UTC ch
    - the ground-truth tier;
    - for parameter modules, today's values plus at least two real users' value sets.
 5. **Run it:** `sas2dbx validate <case.yaml> --engine databricks --as-job`, then triage (§4.6) and get sign-off (§4.3).
+   - If the rules leave steps unsupported, first run `sas2dbx validate <case.yaml> --engine databricks --llm <provider> --repair 2 --max-usd <cap>`.
+   - The LLM converts those steps, and failing runs go back to it with the error or the output differences.
+   - The notebook it saves is the passing one, or the last attempt for a person to finish.
 
 ### 3.5 Configuration you will touch
 
@@ -302,6 +310,7 @@ Suggested tiles: cases by latest status; pass rate by week; failing outputs with
 
 ### 4.8 LLM evaluations: when and how
 
+- **For a real program:** use `validate --llm` (README). Every round is recorded in the evidence file under `llm_repair.history`, and `--max-usd` caps a run's spend.
 - **When to re-run `sas2dbx eval`:** before Phase 2 with your chosen provider and model; after any model, provider or prompt change, or new hazards; and when a construct family moves between rules and LLM.
 - **How:**
   - Run `--estimate` first, which is free.
@@ -404,7 +413,7 @@ Suggested tiles: cases by latest status; pass rate by week; failing outputs with
 | A conversion passes on tested data but fails on other data | several production cycles, parameter value sets, `robust` variants for LLM code |
 | Performance at scale (global-order windows, materialising every step) | T9 in Phase 0; a large-input program in the pilot; repartitioning work before Phase 2 |
 | Unsorted BY input merges silently | keep SAS's `PROC SORT`; implement roadmap 8 before wave C |
-| Sending code to an external LLM | Databricks Model Serving; security review in Phase 0 |
+| Sending code, and in repair prompts sample rows, to an external LLM | Databricks Model Serving; `allow_row_samples: false` for sensitive data; security review in Phase 0 |
 | LLM cost overruns | `--estimate`, cache replays, model choice per family via `eval`, run-log spend tiles |
 | `.sas7bdat` reading constraints (Scala 2.12, time zone) | ingest on Runtime ≤ 16.x dedicated or on a workstation; the UTC guard and cross-check are built in |
 | Users edit parameter notebooks (`%run` runs code) | job parameters where users must not run code; roadmap 6 hard gate |
@@ -414,17 +423,65 @@ Suggested tiles: cases by latest status; pass rate by week; failing outputs with
 
 Programs by status (§4.3), first-attempt and final parity rates, mean time from conversion to sign-off, triage categories per week, LLM spend per converted program, runtime against SAS, and defects found in parallel runs (should trend to zero).
 
-### 5.6 Prioritised backlog for the enterprise team
+### 5.6 What it needs to work at scale (prioritised backlog)
 
-1. Performance at scale: measure T9, then partition-friendly ordering for global-order steps.
-2. BY-sort check (roadmap 8).
-3. G1 capture kit and step-by-step fault localisation (roadmap 11). You have SAS, so this gives the highest value per effort.
-4. In-cluster `.sas7bdat` ingestion path (T7), hardened into a documented job.
-5. Re-run `eval` with your provider and model, and record the per-family decisions.
-6. SQL `BEST.` and the common formats (roadmap 9).
-7. HTML review page per case, generated from the evidence JSON.
-8. Asset Bundle template (roadmap 10).
-9. Parameter kinds the estate needs (roadmap 6), driven by `analyze`.
+**Already in place:**
+- many cases per `validate` run, and job mode with parallel tasks;
+- the run log and team dashboard;
+- LLM answer caching and spend caps (`--max-usd`);
+- fingerprints of the code and expected outputs in every evidence file.
+
+**1. Performance on production-size data (measure it first: T9)**
+- **Whole-table row order:** steps that depend on it run as one Spark partition, i.e. on one machine. That covers `LAG`, `RETAIN` and `_N_` without BY groups, and ordering by `_sas_seq`. Spark warned "No Partition Defined for Window operation" during the Databricks runs.
+  - Partition by BY groups wherever SAS has them.
+  - Compute genuinely table-wide running values with a two-pass, partition-wise method (roadmap 14).
+- **Every step's result is kept in memory** (`ctx.cut`, `localCheckpoint`), like SAS writing WORK. On large data that strains memory, and a lost worker fails the job. Save only when the plan gets deep, and write large intermediate tables to Delta (roadmap 14).
+- **`CALL SYMPUT` with a different macro-variable name per row** collects every row to the driver.
+- **The four Python-backed functions** are slow. Replace them with SQL versions (roadmap 9).
+
+**2. Expected outputs without writing them by hand (roadmap 11)**
+Every program needs expected outputs and a case file. Writing them by hand is the biggest people bottleneck. Build a SAS capture kit:
+- a SAS-side add-on that saves each production run's inputs, outputs and WORK data sets, with their metadata;
+- a generator that writes the case files from those captures, including the library mapping and keys taken from BY and sort order.
+
+The same captures give step-by-step fault localisation. You have SAS, so this pays off most.
+
+**3. Coverage of macro-heavy code**
+- **Where it stands:** on the public PhUSE code, the rules converted 52% of steps, but only 9% of programs completely. The top blockers were run-time macro logic, `%SYSFUNC(OPEN())` metadata calls, data-dependent loops, the `X` statement and unsupported PROCs.
+- **Format catalogs:** shared catalogs (`.sas7bcat`, `OPTIONS FMTSEARCH=`) are not read (roadmap 13). Most estates depend on them.
+- **What to do:** run `analyze` on your estate and extend the rules where the counts are highest:
+  - macro lifting (roadmap 2);
+  - metadata functions as Spark catalog lookups;
+  - the parameter kinds you need (roadmap 6).
+
+  Each extension removes LLM cost and review effort from every program that uses the construct.
+
+**4. A batch runner for hundreds of programs (roadmap 12)**
+`validate` runs cases one at a time in one process:
+- an unexpected error, such as the LLM still unavailable after the SDK's retries, stops the run;
+- there is no per-case time limit;
+- `--llm` cannot be combined with job mode.
+
+Build a runner that:
+- skips cases whose program, expected outputs and tool version are unchanged (the fingerprints are already in the evidence);
+- runs cases in parallel as Databricks job tasks, with a time limit per case;
+- marks a failing case and carries on;
+- supports `--llm` in job mode.
+
+Then CI re-validates only what each pull request changes, and Asset Bundles deploy the jobs (roadmap 10).
+
+**Also**
+- **Correctness before wave C:** the BY-sort check (roadmap 8).
+- **LLM throughput and cost:**
+  - run calls in parallel within rate limits;
+  - use the Message Batches API for first answers (half price, asynchronous) and live calls for repairs;
+  - choose a model per construct family with `eval`, re-run with your provider and model before Phase 2.
+- **Data movement:**
+  - run `.sas7bdat` ingestion as Databricks jobs on Runtime ≤ 16.x that process only changed files (T7);
+  - compare full tables at cutover, and samples in CI.
+- **Run log at volume:** load the per-run files into a Delta table (Auto Loader), so dashboards stay fast.
+- **Sensitive data:** `allow_row_samples: false` keeps sample rows out of repair prompts and evidence. Prefer Databricks Model Serving.
+- **Reviewers:** an HTML review page per case, generated from the evidence JSON (roadmap 11).
 
 ---
 
@@ -434,7 +491,7 @@ Programs by status (§4.3), first-attempt and final parity rates, mean time from
 |---|---|
 | `sas2dbx analyze <dir> [--out estate.json]` | estate inventory and readiness |
 | `sas2dbx convert <program.sas> [--out nb.py] [--libname LIB=uc:cat.schema] [--param NAME] [--define NAME=VALUE] [--param-module params.sas] [--llm anthropic\|databricks:<endpoint>]` | one program to a notebook (plus its parameter notebook) |
-| `sas2dbx validate <case.yaml>… [--engine databricks] [--as-job --schema cat.schema] [--out-dir out]` | parity cases |
+| `sas2dbx validate <case.yaml>… [--engine databricks] [--as-job --schema cat.schema] [--out-dir out] [--llm anthropic\|databricks:<endpoint> [--repair N] [--max-usd X]]` | parity cases. `--llm` converts the steps the rules leave unsupported and sends failing runs back to the LLM (see the README) |
 | `sas2dbx conformance [--engine databricks] [--as-job --schema cat.schema] [--export-sas DIR]` | SAS-semantics suite (`--export-sas` re-baselines it on SAS) |
 | `sas2dbx eval [--strategies rules,hybrid,llm_runtime,llm_plain] [--provider …] [--only …] [--runs N] --estimate \| --yes` | LLM bake-off on the golden set |
 | `sas2dbx robust [--variants N]` | synthetic-input differential test (replays cached answers, no spend) |

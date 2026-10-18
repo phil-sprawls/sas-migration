@@ -159,11 +159,14 @@ def build_catalog(libnames: dict[str, str], spark=None) -> Catalog:
     return cat
 
 
+def program_text(case: ParityCase) -> str:
+    with open(case.program, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
 def convert_case(case: ParityCase, spark=None):
     """Convert the case's program against its libraries' schemas (``uc:`` libraries are read through ``spark``)."""
-    with open(case.program, encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
-    return convert(text, file=os.path.basename(case.program), catalog=build_catalog(case.libnames, spark),
+    return convert(program_text(case), file=os.path.basename(case.program), catalog=build_catalog(case.libnames, spark),
                    macro_vars=case.macro_vars, include_paths=case.include_paths, param_module=case.param_module or None)
 
 
@@ -237,13 +240,20 @@ def case_steps(conv) -> list[dict]:
              "tier": s.tier, "reasons": s.reasons, "hazards": sorted({h[0] for h in s.hazards})} for s in conv.steps]
 
 
-def run_case(case: ParityCase, spark, out_dir: str | None = None, notebook_override: str | None = None) -> CaseResult:
+def gate_detail(result: CaseResult) -> tuple[bool, str]:
+    """A run's verdict and, for a failure, what whoever fixes it needs: the failing cell and its error, or each
+    output's differences with a sample row (no sample values when the case sets ``allow_row_samples: false``)."""
+    exe = result.execution
+    if not exe.get("ok"):
+        return False, f"execution failed in {exe.get('title')}: {str(exe.get('error', ''))[:800]}"
+    bad = [c.summary() + (f" | sample {c.samples[0]}" if c.samples else "") for c in result.comparisons if not c.passed]
+    return (not bad and bool(result.comparisons)), "; ".join(bad)[:2000] or "ok"
+
+
+def execute_case(case: ParityCase, spark, conv, notebook: str) -> CaseResult:
+    """Run one notebook for the case and compare its outputs with the ground truth: the parity gate."""
     from ..runtime.context import SasContext
 
-    conv = convert_case(case, spark)
-    notebook = notebook_override or conv.notebook
-    if out_dir:
-        write_notebooks(case, conv, out_dir, notebook)
     ctx = SasContext(spark, case.libnames, as_of=case.as_of, write_outputs=False, macro_vars=case.macro_vars,
                      sas_reader=case.sas_reader)
     ns = {"spark": spark, "ctx": ctx}
@@ -257,8 +267,56 @@ def run_case(case: ParityCase, spark, out_dir: str | None = None, notebook_overr
     passed = exe["ok"] and bool(comparisons) and all(c.passed for c in comparisons)
     evidence = case_evidence(case, conv, notebook, spark, parameters=parameters,
                              sas_readers={k: {"file": f, "reader": r} for k, (f, r) in ctx.readers.items()})
-    return CaseResult(case.name, passed, conv.stats, exe, comparisons, notebook if out_dir is None else "", evidence,
-                      case_steps(conv))
+    return CaseResult(case.name, passed, conv.stats, exe, comparisons, notebook, evidence, case_steps(conv))
+
+
+def run_case(case: ParityCase, spark, out_dir: str | None = None, notebook_override: str | None = None, *,
+             provider=None, repairs: int = 2, effort: str | None = None, budget_usd: float | None = None,
+             log=None) -> CaseResult:
+    """Convert the case's program, run it and compare its outputs.  With an LLM ``provider``, the steps the rules
+    leave unsupported are converted by the LLM, and a failing run goes back to it with the failure, up to
+    ``repairs`` times (``llm.assist.convert_until_pass``).  The notebook written to ``out_dir`` is the last one
+    the LLM produced, passing or not, so a person can take over from it."""
+    from ..llm.assist import units
+
+    conv = convert_case(case, spark)
+    if provider is not None and notebook_override is None and units(conv):
+        result = _run_with_llm(case, spark, conv, provider, repairs, effort, budget_usd, log)
+        notebook = conv.notebook
+    else:
+        notebook = notebook_override or conv.notebook
+        result = execute_case(case, spark, conv, notebook)
+    if out_dir:
+        write_notebooks(case, conv, out_dir, notebook)
+        result.notebook = ""
+    return result
+
+
+def _run_with_llm(case: ParityCase, spark, conv, provider, repairs: int, effort, budget_usd, log) -> CaseResult:
+    from ..llm.assist import convert_until_pass
+
+    runs: list[CaseResult] = []
+
+    def gate(notebook: str) -> tuple[bool, str]:
+        runs.append(execute_case(case, spark, conv, notebook))
+        return gate_detail(runs[-1])
+
+    conv, out = convert_until_pass(conv, provider, gate, original=program_text(case), attempts=1 + max(0, repairs),
+                                   effort=effort, budget_usd=budget_usd, log=log)
+    result = runs[-1] if runs else CaseResult(      # every answer was rejected by the static guard: nothing ran
+        case.name, False, conv.stats, {"ok": False, "title": "static guard", "error": out.detail}, [], conv.notebook,
+        case_evidence(case, conv, conv.notebook, spark), case_steps(conv))
+    result.passed = out.ok
+    result.evidence["llm_repair"] = {
+        "provider": getattr(provider, "name", None), "model": getattr(provider, "model", None),
+        "answers": out.answers, "max_answers": 1 + max(0, repairs), "first_pass": out.first_pass,
+        "passed_on_answer": out.answers if out.ok else None, "stopped": out.stopped or None,
+        "units": [r.unit for r in out.results], "llm_calls": sum(r.attempts for r in out.results),
+        "cost_usd": out.cost_usd, "billed_usd": out.billed_usd,
+        "tokens_in": sum(r.tokens_in for r in out.results), "tokens_out": sum(r.tokens_out for r in out.results),
+        "history": out.history,
+    }
+    return result
 
 
 def write_result(result: CaseResult, path: str) -> None:

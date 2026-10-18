@@ -153,6 +153,10 @@ DATA steps with more than 300 chained projections (macro-generated steps run to 
 
   The answer is structured JSON (`code`, `outputs`, `notes`).
 - **Gates**: a static guard runs first (syntax; no RDD API, `toPandas`, `spark.conf.set`, `eval`/`exec`/`open`; an import allowlist; must write through `ctx.put`). Then execute, then 2-decimal parity. A failure feeds a bounded repair loop with the gate's diff *summary* and one sample row. Row samples are only included when data governance allows (`allow_row_samples`), which matters for PHI and PII.
+  - The loop is `llm.assist.convert_until_pass`, shared by `validate --llm` and `eval`.
+  - The unit to blame gets back its own code and the problem: the static guard's findings, the failing cell's error, or the output differences. Rules-written cells are never sent.
+  - It stops at a pass, after the allowed answers, or at the spend cap.
+  - `validate` saves the last notebook and records every round in the evidence.
 - **Provenance**: LLM cells are marked `provenance: llm` in the notebook and in the conversion report.
 - **Bake-off** (`sas2dbx eval`, `sas2dbx.llm.eval`): the strategies `rules`, `hybrid`, `llm_runtime` and `llm_plain` run over the golden set. The golden set is conformance cases, 14 frontier cases with hand-derived expectations, and real CDISC programs.
   - The primary metric is parity pass rate, first-attempt and after repair.
@@ -264,3 +268,19 @@ Fetched by `sas2dbx corpus fetch`, pinned to commit SHAs, and never vendored. Li
 8. BY-group order checks. SAS stops a `MERGE`/`SET … BY` whose input is not sorted ("BY variables are not properly sorted"), but the converted code merges anyway. Add a run-time sortedness check, or flag inputs whose order the converter cannot prove. Writing the sales-review oracle exposed this gap.
 9. SQL implementations of `BEST.` and the common `PUT`/`INPUT` formats, so ordinary number-to-text conversion needs no Python UDF. Python UDFs are slower everywhere, and they were the one part of the runtime that Databricks Connect could not run on Free Edition (§7).
 10. A Databricks Asset Bundle template: converted notebooks deployed as jobs, plus a validation task that writes parity results to a Delta table behind the migration dashboard.
+11. G1 capture kit, step-by-step fault localisation and an HTML review page per case.
+    - A SAS-side add-on exports each run's inputs, outputs and WORK data sets with their metadata.
+    - Case files are generated from those exports: library mapping, plus keys taken from BY and sort order.
+    - Intermediate data sets are compared through `checkpoint_hook`, to name the first step that diverges.
+12. Batch runner:
+    - resumable: it skips unchanged cases by fingerprint;
+    - runs cases as parallel Databricks job tasks, with a time limit per case;
+    - isolates failures, so one failing case doesn't stop the run;
+    - supports `--llm` repairs in job mode.
+
+    CI then re-validates only what changed.
+13. SAS format catalogs: read `.sas7bcat` catalogs, or their `CNTLOUT` exports, and honour `OPTIONS FMTSEARCH=`.
+14. Runtime at scale:
+    - partition-friendly row order for steps that need the whole table's order (BY-group partitions; two-pass running values);
+    - adaptive materialisation instead of a `localCheckpoint` after every step: save only deep plans, and write large intermediate tables to Delta;
+    - no driver-side collection for per-row `CALL SYMPUT`.
