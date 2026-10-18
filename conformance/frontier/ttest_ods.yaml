@@ -1,0 +1,45 @@
+id: FRONTIER-TTEST-01
+family: stat-proc
+hazards: []
+title: PROC TTEST two-sample ODS TTests table (pooled and Satterthwaite)
+reference: SAS/STAT 15.x User's Guide, TTEST procedure, ODS table TTests
+expect_unsupported: true
+# The ODS TTests table also has Variable and Variances; Variable's spelling depends on how the data set was
+# created, so only the statistics and Method are compared until this case is re-baselined on SAS.
+compare_columns: subset
+sas: |
+  proc ttest data=vs;
+    class trt;
+    var chg;
+    ods output TTests=tt;
+  run;
+inputs:
+  vs: {columns: {trt: char(1), chg: num}, rows: [['A', 1], ['A', 2], ['A', 3], ['A', 4], ['B', 2], ['B', 4], ['B', 6], ['B', 8], ['B', 10]]}
+expected:
+  tt:
+    columns: [method, tvalue, df, probt]
+    rows: [['Pooled', -2.0578066, 7, 0.0786192], ['Satterthwaite', -2.2514363, 5.5207877, 0.0691336]]
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  import math
+
+  from pyspark.sql import types as T
+  from scipy import stats as st
+
+  g = (ctx.get("vs").where(F.col("chg").isNotNull()).groupBy("trt")
+       .agg(F.count("chg").alias("n"), F.avg("chg").alias("m"), F.var_samp("chg").alias("v")).orderBy("trt").collect())
+  (a, b) = g
+  diff = a["m"] - b["m"]
+  dfp = a["n"] + b["n"] - 2
+  sp2 = ((a["n"] - 1) * a["v"] + (b["n"] - 1) * b["v"]) / dfp
+  tp = diff / math.sqrt(sp2 * (1 / a["n"] + 1 / b["n"]))
+  se2 = a["v"] / a["n"] + b["v"] / b["n"]
+  dfs = se2 ** 2 / ((a["v"] / a["n"]) ** 2 / (a["n"] - 1) + (b["v"] / b["n"]) ** 2 / (b["n"] - 1))
+  ts = diff / math.sqrt(se2)
+  rows = [("chg", "Pooled", "Equal", float(dfp), tp, float(2 * st.t.sf(abs(tp), dfp)), 0),
+          ("chg", "Satterthwaite", "Unequal", dfs, ts, float(2 * st.t.sf(abs(ts), dfs)), 1)]
+  schema = T.StructType([T.StructField(n, t()) for n, t in [("Variable", T.StringType), ("Method", T.StringType),
+                         ("Variances", T.StringType), ("DF", T.DoubleType), ("tValue", T.DoubleType), ("Probt", T.DoubleType),
+                         ("_sas_seq", T.LongType)]])
+  ctx.put("tt", spark.createDataFrame(rows, schema))

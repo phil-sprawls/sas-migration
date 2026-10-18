@@ -1,0 +1,10 @@
+id: H-LAG-COND-01
+hazards: [H-LAG-COND]
+title: a conditional LAG only advances its queue when it executes
+reference: SAS 9.4 Functions, LAG ("Storing values at the bottom of the queue ... only when the function is executed")
+sas: |
+  data out; set in; if x > 0 then p = lag(x); run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [-2], [3], [-4], [5]]}
+expected:
+  out: {columns: [x, p], rows: [[1, null], [-2, null], [3, 1], [-4, null], [5, 3]]}

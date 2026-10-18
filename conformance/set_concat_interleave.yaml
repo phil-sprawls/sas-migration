@@ -1,0 +1,13 @@
+id: SET-01
+hazards: [H-ORDER]
+title: SET concatenates (missing for absent variables); SET with BY interleaves
+reference: SAS 9.4 Language Reference Concepts, Concatenating and interleaving
+sas: |
+  data cat; set a b; run;
+  data inter; set a b; by k; run;
+inputs:
+  a: {columns: {k: num, s: char(2), x: num}, rows: [[1, 'a1', 5], [3, 'a3', 6]]}
+  b: {columns: {k: num, s: char(2)}, rows: [[1, 'b1'], [2, 'b2']]}
+expected:
+  cat: {columns: [k, s, x], rows: [[1, 'a1', 5], [3, 'a3', 6], [1, 'b1', null], [2, 'b2', null]]}
+  inter: {columns: [k, s, x], rows: [[1, 'a1', 5], [1, 'b1', null], [2, 'b2', null], [3, 'a3', 6]]}

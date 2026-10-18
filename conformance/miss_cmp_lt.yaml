@@ -1,0 +1,10 @@
+id: H-MISS-CMP-01
+hazards: [H-MISS-CMP]
+title: missing numeric values satisfy '<' in a subsetting IF
+reference: SAS 9.4 Language Reference Concepts, Missing Values - comparisons (missing is smaller than any number)
+sas: |
+  data out; set in; if x < 5; run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, 3], [2, null], [3, 7]]}
+expected:
+  out: {keys: [id], columns: [id, x], rows: [[1, 3], [2, null]]}

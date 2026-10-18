@@ -1,0 +1,10 @@
+id: OUTPUT-01
+hazards: [H-ORDER]
+title: several OUTPUT statements write rows in execution order
+reference: SAS 9.4 Statements, OUTPUT
+sas: |
+  data out; set in; output; x = x * 10; output; run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [2]]}
+expected:
+  out: {columns: [x], rows: [[1], [10], [2], [20]]}

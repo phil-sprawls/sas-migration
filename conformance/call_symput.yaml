@@ -1,0 +1,12 @@
+id: H-RUNTIME-MACRO-01
+hazards: [H-RUNTIME-MACRO]
+title: CALL SYMPUTX creates a macro variable used by a later step
+reference: SAS 9.4 Macro Language Reference, CALL SYMPUTX
+sas: |
+  data _null_; set in end=eof; if eof then call symputx('maxx', x); run;
+  data out; set in; d = &maxx - x; run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [3]]}
+expected:
+  out: {columns: [x, d], rows: [[1, 2], [3, 0]]}
+expected_runtime_macros: {MAXX: '3'}

@@ -1,0 +1,14 @@
+id: DATE-01
+hazards: []
+title: MDY/YEAR/MONTH/DAY/WEEKDAY/QTR; invalid dates are missing
+reference: SAS 9.4 Functions, MDY / WEEKDAY (1=Sunday)
+sas: |
+  data out;
+    d = mdy(2, 29, 2020);
+    y = year(d); m = month(d); dd = day(d); w = weekday(d); q = qtr(d);
+    bad = mdy(2, 30, 2020);
+    lit = '15JAN2020'd;
+  run;
+inputs: {}
+expected:
+  out: {columns: [d, y, m, dd, w, q, bad, lit], rows: [[21974, 2020, 2, 29, 7, 1, null, 21929]]}

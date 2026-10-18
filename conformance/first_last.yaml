@@ -1,0 +1,10 @@
+id: H-ORDER-01
+hazards: [H-ORDER]
+title: FIRST./LAST. flags from BY-group processing
+reference: SAS 9.4 Language Reference Concepts, BY-group processing in the DATA step
+sas: |
+  data out; set in; by g; f = first.g; l = last.g; run;
+inputs:
+  in: {columns: {g: char(1), x: num}, rows: [['A', 1], ['A', 2], ['B', 3]]}
+expected:
+  out: {columns: [g, x, f, l], rows: [['A', 1, 1, 0], ['A', 2, 0, 1], ['B', 3, 1, 1]]}

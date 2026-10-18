@@ -1,0 +1,12 @@
+id: DSOPT-01
+hazards: []
+title: KEEP=/RENAME= on output; WHERE= uses the renamed variable on input
+reference: SAS 9.4 Data Set Options, RENAME= ("use the new name in WHERE processing")
+sas: |
+  data out1(keep=a b rename=(a=z)); set in; run;
+  data out2; set in(rename=(a=y) where=(y > 1)); run;
+inputs:
+  in: {columns: {a: num, b: num, c: num}, rows: [[1, 2, 3], [4, 5, 6]]}
+expected:
+  out1: {columns: [z, b], rows: [[1, 2], [4, 5]]}
+  out2: {columns: [y, b, c], rows: [[4, 5, 6]]}

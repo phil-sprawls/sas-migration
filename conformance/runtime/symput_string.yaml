@@ -1,0 +1,17 @@
+id: H-RUNTIME-MACRO-02
+hazards: [H-RUNTIME-MACRO]
+family: run-time macro value in a quoted string
+title: a CALL SYMPUTX value inside double-quoted strings (WHERE, subsetting IF, assignment)
+reference: SAS 9.4 Macro Language Reference, "Using macro variables in quoted strings" (double quotes resolve)
+sas: |
+  data _null_; set in; if id = 2 then call symputx('r', region); run;
+  data w; set in; where region = "&r"; run;
+  data f; set in; if region = "&r"; run;
+  data a; set in; length t $20; t = "R=&r"; run;
+inputs:
+  in: {columns: {id: num, region: char(8)}, rows: [[1, 'EAST'], [2, 'WEST'], [3, 'WEST']]}
+expected:
+  w: {columns: [id, region], rows: [[2, 'WEST'], [3, 'WEST']]}
+  f: {columns: [id, region], rows: [[2, 'WEST'], [3, 'WEST']]}
+  a: {columns: [id, region, t], rows: [[1, 'EAST', 'R=WEST'], [2, 'WEST', 'R=WEST'], [3, 'WEST', 'R=WEST']]}
+expected_runtime_macros: {R: 'WEST'}

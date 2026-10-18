@@ -1,0 +1,26 @@
+name: sales_review_user
+description: >
+  The same converted sales review with the values a user typed into the parameter notebook: a Spark SQL row filter
+  and flag filter (Spark rules: a comparison with NULL is never true), other countries and dates, an extra detail
+  column and an extra grouping column. One notebook serves every value. Ground truth: cases/oracles/sales_review.py.
+ground_truth: G3
+program: ../examples/sales_review/report.sas
+param_module: ../examples/sales_review/params.sas
+include_paths: [../examples/sales_review]
+param_values:
+  report_title: West region review
+  start_month: "1993-01-01"
+  end_month: "1993-12-31"
+  countries: [GERMANY, U.S.A.]
+  row_filter: "actual > 500 AND region = 'WEST'"
+  flag_filter: "pct_of_target < 105"
+  keep_cols: [country, region, division, product, month, actual, predict]
+  group_cols: [country, region, product]
+libnames:
+  sales: parquet:../out/ingest/sales
+outputs:
+  - {dataset: detail, expected: ../corpus/oracles/sales_review/user/detail.parquet, mode: ordered}
+  - {dataset: summary, expected: ../corpus/oracles/sales_review/user/summary.parquet, keys: [country, region, product]}
+  - {dataset: review, expected: ../corpus/oracles/sales_review/user/review.parquet, keys: [country, region, product]}
+  - {dataset: flagged, expected: ../corpus/oracles/sales_review/user/flagged.parquet, keys: [country, region, product]}
+  - {dataset: report_title, expected: ../corpus/oracles/sales_review/user/report_title.parquet}

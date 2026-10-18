@@ -1,0 +1,17 @@
+id: MACRO-01
+hazards: []
+title: '%LET, macro with parameters, %IF in open code generation'
+reference: SAS 9.4 Macro Language Reference
+macro_vars: {}
+sas: |
+  %let n = 3;
+  %macro twice(v); (&v * 2) %mend;
+  %macro pick(flag);
+    %if &flag = Y %then %do; z = 1; %end;
+    %else %do; z = 0; %end;
+  %mend;
+  data out; set in; y = %twice(x) + &n; %pick(Y) run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [2]]}
+expected:
+  out: {columns: [x, y, z], rows: [[1, 5, 1], [2, 7, 1]]}

@@ -1,0 +1,10 @@
+id: H-RETAIN-03
+hazards: [H-ORDER]
+title: retained variable carries the last non-missing value forward (LOCF)
+reference: SAS 9.4 Statements, RETAIN
+sas: |
+  data out; set in; retain last; if not missing(x) then last = x; run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [null], [null], [4], [null]]}
+expected:
+  out: {columns: [x, last], rows: [[1, 1], [null, 1], [null, 1], [4, 4], [null, 4]]}

@@ -1,0 +1,15 @@
+id: DATE-02
+hazards: []
+title: DHMS / DATEPART / TIMEPART / HOUR
+reference: SAS 9.4 Functions, DHMS / DATEPART / TIMEPART / HOUR
+sas: |
+  data out;
+    dt = dhms('15JAN2020'd, 14, 30, 5);
+    dp = datepart(dt);
+    tp = timepart(dt);
+    h = hour(dt);
+    mi = minute(dt);
+  run;
+inputs: {}
+expected:
+  out: {columns: [dt, dp, tp, h, mi], rows: [[1894717805, 21929, 52205, 14, 30]]}

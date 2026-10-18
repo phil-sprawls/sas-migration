@@ -1,0 +1,17 @@
+id: H-MACRO-EXTERNAL-01
+hazards: [H-MACRO-EXTERNAL, H-MISS-CMP]
+family: run-time parameters
+title: prompt values supplied when the program runs - one notebook for every value (char, numeric, date literal, SQL)
+reference: SAS 9.4 Macro Language Reference, macro variable resolution; Stored Process prompts become macro variables
+params: [region, threshold, start_dt]
+macro_vars: {region: WEST, threshold: '5', start_dt: 10JAN2020}
+sas: |
+  data a; set in; where region = "&region" and x > &threshold; run;
+  data b; set in; if d >= "&start_dt"d; run;
+  proc sql; create table c as select id from in where region = "&region" and d < "&start_dt"d; quit;
+inputs:
+  in: {columns: {id: num, x: num, region: char(8), d: num:date9.}, rows: [[1, 3, 'WEST', '01JAN2020'], [2, 7, 'WEST', '15JAN2020'], [3, 9, 'EAST', '10JAN2020'], [4, null, 'WEST', null]]}
+expected:
+  a: {columns: [id, x, region, d], rows: [[2, 7, 'WEST', '15JAN2020']]}
+  b: {columns: [id, x, region, d], rows: [[2, 7, 'WEST', '15JAN2020'], [3, 9, 'EAST', '10JAN2020']]}
+  c: {keys: [id], columns: [id], rows: [[1], [4]]}

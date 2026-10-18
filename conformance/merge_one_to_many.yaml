@@ -1,0 +1,11 @@
+id: H-MERGE-01
+hazards: [H-MERGE-M2M]
+title: one-to-many MERGE with IN= flags (subsetting on the many side)
+reference: SAS 9.4 Language Reference Concepts, Match-merging
+sas: |
+  data out; merge ae(in=a) dm(in=d); by id; if a; flag = d; run;
+inputs:
+  ae: {columns: {id: num, ae: char(1)}, rows: [[1, 'X'], [1, 'Y'], [3, 'Z']]}
+  dm: {columns: {id: num, age: num}, rows: [[1, 30], [2, 40]]}
+expected:
+  out: {columns: [id, ae, age, flag], rows: [[1, 'X', 30, 1], [1, 'Y', 30, 1], [3, 'Z', null, 0]]}

@@ -1,0 +1,15 @@
+id: ARRAY-01
+hazards: []
+title: array processing in a DO loop (missing to zero); loop index after the loop
+reference: SAS 9.4 Statements, ARRAY
+sas: |
+  data out; set in;
+    array a{3} a1-a3;
+    do i = 1 to 3;
+      if a{i} = . then a{i} = 0;
+    end;
+  run;
+inputs:
+  in: {columns: {a1: num, a2: num, a3: num}, rows: [[1, null, 3], [null, null, null]]}
+expected:
+  out: {columns: [a1, a2, a3, i], rows: [[1, 0, 3, 4], [0, 0, 0, 4]]}

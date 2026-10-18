@@ -1,0 +1,13 @@
+id: H-MACRO-EXTERNAL-03
+hazards: [H-MACRO-EXTERNAL]
+title: '%IF on a macro variable nothing defines is not decided at conversion time (no branch is guessed)'
+reference: SAS 9.4 Macro Language Reference, %IF-%THEN/%ELSE
+expect_unsupported: true
+sas: |
+  %macro run;
+    %if &mode = FULL %then %do; data a; set in; run; %end;
+    %else %do; data a; set in(obs=1); run; %end;
+  %mend;
+  %run
+inputs:
+  in: {columns: {id: num}, rows: [[1], [2]]}

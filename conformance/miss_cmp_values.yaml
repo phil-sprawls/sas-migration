@@ -1,0 +1,21 @@
+id: H-MISS-CMP-02
+hazards: [H-MISS-CMP, H-TRUTH]
+title: comparisons with missing return 1/0 values; . = . is true
+reference: SAS 9.4 Language Reference Concepts, Missing Values; Boolean numeric expressions
+sas: |
+  data out; set in;
+    is_miss = (x = .);
+    lt_zero = (x < 0);
+    gt_z = (x > .z);
+    eq_y = (x = y);
+  run;
+inputs:
+  in: {columns: {id: num, x: num, y: num}, rows: [[1, null, null], [2, -1, 3], [3, 4, 4]]}
+expected:
+  out:
+    columns: [id, x, y, is_miss, lt_zero, gt_z, eq_y]
+    keys: [id]
+    rows:
+      - [1, null, null, 1, 1, 0, 1]
+      - [2, -1, 3, 0, 1, 1, 0]
+      - [3, 4, 4, 0, 0, 1, 1]

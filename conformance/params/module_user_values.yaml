@@ -1,0 +1,48 @@
+id: PARAM-MODULE-02
+hazards: [H-MACRO-EXTERNAL]
+family: parameter module
+title: the same converted program with the values a user typed into the parameter notebook (one notebook, every value)
+reference: SAS 9.4 Macro Language Reference (%INCLUDE, %LET)
+param_values:
+  filter: "amount >= 50"
+  regions: [EAST, NORTH]
+  start_dt: "2020-01-15"
+  vars: [id, region, amount, status]
+  region: NORTH
+param_module: |
+  /* Sales report parameters - edit the values below */
+  %let region = EAST;                                  /* sales region shown in the title */
+  %let start_dt = 01JAN2020;                           /* first order date */
+  %let filter = amount > 100 and status ne 'X';        /* which orders to report */
+  %let regions = 'EAST','WEST';                        /* regions to include */
+  %let vars = id region amount;                        /* columns to keep */
+  %let groupvars = region;                             /* summary groups */
+sas: |
+  %include "params.sas";
+  data sel;
+    set orders;
+    where &filter and order_date >= "&start_dt"d;
+    if region in (&regions);
+    keep &vars;
+  run;
+  proc sort data=sel out=sorted; by id; run;
+  proc sql;
+    create table summ as select &groupvars, sum(amount) as total from sorted group by &groupvars;
+  quit;
+  data titled; set summ; length t $20; t = "Region &region"; run;
+inputs:
+  orders:
+    columns: {id: num, region: char(8), status: char(1), amount: num, order_date: num:date9.}
+    rows:
+      - [1, EAST, A, 150, '05JAN2020']
+      - [2, WEST, X, 200, '10JAN2020']
+      - [3, EAST, null, 120, '31DEC2019']
+      - [4, NORTH, A, 500, '01FEB2020']
+      - [5, WEST, null, 101, '01MAR2020']
+      - [6, EAST, A, 50, '20JAN2020']
+      - [7, EAST, A, null, '21JAN2020']
+      - [8, WEST, B, 300, null]
+expected:
+  sel: {columns: [id, region, status, amount], rows: [[4, NORTH, A, 500], [6, EAST, A, 50]]}
+  summ: {keys: [region], columns: [region, total], rows: [[EAST, 50], [NORTH, 500]]}
+  titled: {keys: [region], columns: [region, total, t], rows: [[EAST, 50, Region NORTH], [NORTH, 500, Region NORTH]]}

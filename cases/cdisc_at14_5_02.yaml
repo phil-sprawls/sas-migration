@@ -1,0 +1,21 @@
+name: cdisc_at14_5_02
+description: >
+  CDISC pilot table 14-5.02 (serious TEAEs by SOC/PT with Fisher exact tests): PROC SQL remerges,
+  joins and PROC FREQ ODS output. original program (arm codes 0/1/2 do not exist in the data: SAS computes no Fisher statistics). Ground truth: independent double programming
+  (cases/oracles/at14_5_02.py: pandas + scipy, no shared code with sas2dbx).
+ground_truth: G3
+program: ../corpus/cdisc-pilot/programs/at14-5-02.sas
+libnames:
+  adam: sasfiles:../corpus/cdisc-pilot/adam
+outputs:
+  - {dataset: resultpt, expected: ../corpus/oracles/at14_5_02/resultpt.parquet, keys: [TRTAN, AEBODSYS, AEDECOD], columns: [count, AEBODSYS, AEDECOD, TRTAN, SUMMARYLEVEL, DENOM, events, RESULT]}
+  - {dataset: resultsoc, expected: ../corpus/oracles/at14_5_02/resultsoc.parquet, keys: [TRTAN, AEBODSYS], columns: [count, AEBODSYS, TRTAN, SUMMARYLEVEL, DENOM, events, RESULT]}
+  - {dataset: resultsub, expected: ../corpus/oracles/at14_5_02/resultsub.parquet, keys: [TRTAN], columns: [count, TRTAN, SUMMARYLEVEL, DENOM, events, RESULT]}
+  - {dataset: f1pt, expected: ../corpus/oracles/at14_5_02/f1pt.parquet, keys: [AEDECOD], columns: [AEDECOD, Name1, nValue1]}
+  - {dataset: f2pt, expected: ../corpus/oracles/at14_5_02/f2pt.parquet, keys: [AEDECOD], columns: [AEDECOD, Name1, nValue1]}
+  - {dataset: f1soc, expected: ../corpus/oracles/at14_5_02/f1soc.parquet, keys: [AEBODSYS], columns: [AEBODSYS, Name1, nValue1]}
+  - {dataset: f2soc, expected: ../corpus/oracles/at14_5_02/f2soc.parquet, keys: [AEBODSYS], columns: [AEBODSYS, Name1, nValue1]}
+  - {dataset: f1sub, expected: ../corpus/oracles/at14_5_02/f1sub.parquet, columns: [Name1, nValue1], mode: unordered}
+  - {dataset: f2sub, expected: ../corpus/oracles/at14_5_02/f2sub.parquet, columns: [Name1, nValue1], mode: unordered}
+decimals: 2
+as_of: "2013-01-01"

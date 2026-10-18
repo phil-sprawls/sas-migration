@@ -1,0 +1,10 @@
+id: H-NODUPKEY-01
+hazards: [H-NODUPKEY, H-ORDER]
+title: NODUPKEY keeps the first observation of each key in input order
+reference: SAS 9.4 Procedures, PROC SORT NODUPKEY with EQUALS (default)
+sas: |
+  proc sort data=in out=out nodupkey; by k; run;
+inputs:
+  in: {columns: {k: num, v: char(1)}, rows: [[2, 'x'], [1, 'a'], [2, 'y'], [1, 'b']]}
+expected:
+  out: {columns: [k, v], rows: [[1, 'a'], [2, 'x']]}
