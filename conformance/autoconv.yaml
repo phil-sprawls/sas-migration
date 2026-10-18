@@ -1,0 +1,18 @@
+id: H-AUTOCONV-01
+hazards: [H-AUTOCONV]
+title: numeric to character uses BEST12. right aligned; character to numeric via BEST32.
+reference: SAS 9.4 Language Reference Concepts, Automatic numeric-character conversion
+sas: |
+  data out; set in;
+    length c $12;
+    c = n;
+    m = '42' + n;
+  run;
+inputs:
+  in: {columns: {id: num, n: num}, rows: [[1, 5]]}
+expected:
+  out:
+    columns: [id, n, c, m]
+    keys: [id]
+    rows:
+      - [1, 5, '           5', 47]

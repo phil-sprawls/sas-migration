@@ -1,0 +1,21 @@
+id: H-MISS-ARITH-01
+hazards: [H-MISS-ARITH]
+title: operators propagate missing; SUM/MIN/MAX functions skip missing
+reference: SAS 9.4 Functions, SUM / MIN / MAX (missing values are ignored)
+sas: |
+  data out; set in;
+    plus = x + 1;
+    s = sum(x, 1);
+    mx = max(x, 2);
+    mn = min(x, 2);
+    allmiss = sum(x, .);
+  run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, null], [2, 5]]}
+expected:
+  out:
+    columns: [id, x, plus, s, mx, mn, allmiss]
+    keys: [id]
+    rows:
+      - [1, null, null, 1, 2, 2, null]
+      - [2, 5, 6, 6, 5, 2, 5]

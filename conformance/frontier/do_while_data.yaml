@@ -1,0 +1,43 @@
+id: FRONTIER-DOWHILE-01
+family: data-dependent-loop
+hazards: [H-MISS-CMP]
+title: DO WHILE whose iteration count depends on the row's data (missing target ends the loop at once)
+reference: SAS 9.4 Statements Reference, DO WHILE statement
+expect_unsupported: true
+sas: |
+  data out; set loans;
+    bal = principal; years = 0;
+    do while (bal < target);
+      bal = bal * (1 + rate);
+      years + 1;
+    end;
+  run;
+inputs:
+  loans: {columns: {id: num, principal: num, rate: num, target: num}, rows: [[1, 100, 0.1, 150], [2, 200, 0.05, 200], [3, 50, 0.5, 100], [4, 10, 0.2, null]]}
+expected:
+  out: {columns: [id, principal, rate, target, bal, years], rows: [[1, 100, 0.1, 150, 161.051, 5], [2, 200, 0.05, 200, 200, 0], [3, 50, 0.5, 100, 112.5, 2], [4, 10, 0.2, null, 10, 0]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  from pyspark.sql import types as T
+
+
+  @F.udf(returnType=T.StructType([T.StructField("bal", T.DoubleType()), T.StructField("years", T.DoubleType())]))
+  def _grow(principal, rate, target):
+      def lt(a, b):                      # SAS: missing is smaller than every number
+          if b is None:
+              return False
+          return True if a is None else a < b
+      bal, years, n = principal, 0.0, 0
+      while lt(bal, target):
+          bal = None if bal is None or rate is None else bal * (1 + rate)
+          years += 1
+          n += 1
+          if n > 10_000_000:
+              raise ValueError("DO WHILE does not terminate")
+      return (bal, years)
+
+
+  df = ctx.get("loans").withColumn("_r", _grow("principal", "rate", "target"))
+  df = df.withColumn("bal", F.col("_r.bal")).withColumn("years", F.col("_r.years")).drop("_r")
+  ctx.put("out", df, meta={"bal": {"type": "num", "length": 8}, "years": {"type": "num", "length": 8}})

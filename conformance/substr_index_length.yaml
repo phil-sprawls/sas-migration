@@ -1,0 +1,22 @@
+id: FUNC-CHAR-02
+hazards: []
+title: SUBSTR, INDEX, LENGTH (blank is 1), LENGTHN, PROPCASE, UPCASE
+reference: SAS 9.4 Functions, LENGTH ("returns 1 for a blank string") / LENGTHN / PROPCASE
+sas: |
+  data out; set in;
+    sb = substr(s, 2, 3);
+    ix = index(s, 'cd');
+    l1 = length(e);
+    l2 = lengthn(e);
+    l3 = length(s);
+    pc = propcase('hello WORLD-foo');
+    up = upcase(s);
+  run;
+inputs:
+  in: {columns: {id: num, s: char(8), e: char(4)}, rows: [[1, 'abcdef', null]]}
+expected:
+  out:
+    columns: [id, s, e, sb, ix, l1, l2, l3, pc, up]
+    keys: [id]
+    rows:
+      - [1, 'abcdef', '', 'bcd', 3, 1, 0, 6, 'Hello World-Foo', 'ABCDEF']

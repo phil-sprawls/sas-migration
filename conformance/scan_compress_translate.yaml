@@ -1,0 +1,24 @@
+id: FUNC-CHAR-01
+hazards: [H-TRANSLATE-ARGS]
+title: SCAN default delimiters, COMPRESS, TRANSLATE argument order, TRANWRD
+reference: SAS 9.4 Functions, SCAN / COMPRESS / TRANSLATE / TRANWRD
+sas: |
+  data out; set in;
+    w2 = scan(s, 2);
+    w3 = scan(s, 3);
+    wl = scan(s, -1);
+    w9 = scan(s, 9);
+    c1 = compress(s);
+    c2 = compress(s, ',!');
+    t1 = translate('abcd', 'xy', 'ab');
+    t2 = translate('abc', 'x', 'ab');
+    r = tranwrd('a cat a cat', 'cat', 'dog');
+  run;
+inputs:
+  in: {columns: {id: num, s: char(30)}, rows: [[1, 'one,two  three!four']]}
+expected:
+  out:
+    columns: [id, s, w2, w3, wl, w9, c1, c2, t1, t2, r]
+    keys: [id]
+    rows:
+      - [1, 'one,two  three!four', 'two', 'three', 'four', null, 'one,twothree!four', 'onetwo  threefour', 'xycd', 'x c', 'a dog a dog']

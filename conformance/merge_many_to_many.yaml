@@ -1,0 +1,11 @@
+id: H-MERGE-M2M-01
+hazards: [H-MERGE-M2M]
+title: many-to-many MERGE pairs rows positionally and retains the shorter side's last row
+reference: SAS 9.4 Language Reference Concepts, Match-merging (repeats of BY values)
+sas: |
+  data out; merge a b; by k; run;
+inputs:
+  a: {columns: {k: num, va: num}, rows: [[1, 10], [1, 11]]}
+  b: {columns: {k: num, vb: num}, rows: [[1, 20], [1, 21], [1, 22]]}
+expected:
+  out: {columns: [k, va, vb], rows: [[1, 10, 20], [1, 11, 21], [1, 11, 22]]}

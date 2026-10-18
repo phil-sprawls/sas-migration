@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sas2dbx"
+version = "0.1.0"
+description = "Convert SAS programs to Databricks (PySpark / Spark SQL) and prove output parity."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+# The generated code depends only on `sas2dbx.runtime`, which needs PySpark
+# (provided by Databricks) plus pandas/numpy/scipy (preinstalled on DBR).
+dependencies = []
+
+[project.optional-dependencies]
+convert = ["sqlglot>=30,<31", "pyyaml>=6"]
+validate = ["pyreadstat>=1.2", "pandas>=2.0", "pyarrow>=14", "numpy>=1.24", "scipy>=1.10", "pyyaml>=6"]
+stats = ["statsmodels>=0.14", "scipy>=1.10"]
+llm = ["anthropic>=1.0", "databricks-sdk>=0.40"]
+spark = ["pyspark>=3.5.2"]
+dev = [
+  "sas2dbx[convert,validate,stats,spark]",
+  "pytest>=8",
+]
+
+[project.scripts]
+sas2dbx = "sas2dbx.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sas2dbx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "spark: needs a local Spark session (Java 17+)",
+  "corpus: needs the public corpus fetched by `sas2dbx corpus fetch`",
+  "databricks: needs a Databricks workspace (DATABRICKS_CONFIG_PROFILE)",
+  "llm: calls a live LLM provider",
+]

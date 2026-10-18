@@ -1,0 +1,24 @@
+id: FRONTIER-POINT-01
+family: random-access
+hazards: []
+title: SET POINT= / NOBS= random access (reverse read) is routed to LLM/manual, never approximated
+reference: SAS 9.4 Statements Reference, SET statement POINT= and NOBS= options
+expect_unsupported: true
+sas: |
+  data out;
+    do k = nobs to 1 by -1;
+      set in point=k nobs=nobs;
+      output;
+    end;
+    stop;
+  run;
+inputs:
+  in: {columns: {x: num, y: char(2)}, rows: [[1, 'a'], [2, 'b'], [3, 'c']]}
+expected:
+  out: {columns: [x, y], rows: [[3, 'c'], [2, 'b'], [1, 'a']]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  df = ctx.get("in")
+  out = df.orderBy(F.col("_sas_seq").desc()).withColumn("_sas_seq", F.monotonically_increasing_id())
+  ctx.put("out", out)

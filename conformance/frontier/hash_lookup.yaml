@@ -1,0 +1,33 @@
+id: FRONTIER-HASH-01
+family: hash-object
+hazards: []
+title: hash object lookup (DECLARE HASH / FIND) with a not-found default
+reference: SAS 9.4 Component Objects Reference, hash object FIND method
+expect_unsupported: true
+sas: |
+  data out;
+    if 0 then set dm(keep=usubjid arm);
+    if _n_ = 1 then do;
+      declare hash h(dataset: 'dm');
+      h.defineKey('usubjid');
+      h.defineData('arm');
+      h.defineDone();
+    end;
+    set ae;
+    if h.find() ne 0 then arm = 'UNKNOWN';
+  run;
+inputs:
+  dm: {columns: {usubjid: char(4), arm: char(8)}, rows: [['01', 'PLACEBO'], ['02', 'DRUG']]}
+  ae: {columns: {usubjid: char(4), aeterm: char(12)}, rows: [['01', 'HEADACHE'], ['03', 'NAUSEA'], ['02', 'RASH'], ['01', 'FEVER']]}
+expected:
+  out: {columns: [usubjid, arm, aeterm], rows: [['01', 'PLACEBO', 'HEADACHE'], ['03', 'UNKNOWN', 'NAUSEA'], ['02', 'DRUG', 'RASH'], ['01', 'PLACEBO', 'FEVER']]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  first = W.partitionBy("usubjid").orderBy("_sas_seq")
+  lk = (ctx.get("dm").withColumn("_r", F.row_number().over(first)).where(F.col("_r") == 1)
+        .select(F.col("usubjid").alias("_k"), F.col("arm").alias("_arm")))
+  ae = ctx.get("ae")
+  df = ae.join(lk, ae["usubjid"] == lk["_k"], "left")
+  df = df.withColumn("arm", F.when(F.col("_k").isNull(), F.lit("UNKNOWN")).otherwise(F.col("_arm")))
+  ctx.put("out", df.select("usubjid", "arm", "aeterm", "_sas_seq"), meta={"arm": {"type": "char", "length": 8}})

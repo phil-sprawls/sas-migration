@@ -1,0 +1,10 @@
+id: H-LAG-01
+hazards: [H-ORDER, H-LAG-BY]
+title: LAG and DIF look at the previous row
+reference: SAS 9.4 Functions, LAG / DIF
+sas: |
+  data out; set in; p = lag(x); d = dif(x); run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [2], [4]]}
+expected:
+  out: {columns: [x, p, d], rows: [[1, null, null], [2, 1, 1], [4, 2, 2]]}

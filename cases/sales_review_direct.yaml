@@ -1,0 +1,18 @@
+name: sales_review_direct
+description: >
+  Synthetic sales-review program with a parameter file (filters, a value list, column lists, dates, text) over a
+  real public SAS data set read straight from the .sas7bdat (SASHELP.PRDSALE): spark-sas7bdat where it is on the
+  cluster (Spark 3.x / Databricks Runtime <= 16.x), pyreadstat otherwise. Run with today's parameter values (the generated parameter
+  notebook's defaults). Ground truth: independent double programming (cases/oracles/sales_review.py: pandas + pyreadstat).
+ground_truth: G3
+program: ../examples/sales_review/report.sas
+param_module: ../examples/sales_review/params.sas
+include_paths: [../examples/sales_review]
+libnames:
+  sales: sasfiles:../corpus/public-sas7bdat
+outputs:
+  - {dataset: detail, expected: ../corpus/oracles/sales_review/defaults/detail.parquet, mode: ordered}
+  - {dataset: summary, expected: ../corpus/oracles/sales_review/defaults/summary.parquet, keys: [country, product]}
+  - {dataset: review, expected: ../corpus/oracles/sales_review/defaults/review.parquet, keys: [country, product]}
+  - {dataset: flagged, expected: ../corpus/oracles/sales_review/defaults/flagged.parquet, keys: [country, product]}
+  - {dataset: report_title, expected: ../corpus/oracles/sales_review/defaults/report_title.parquet}

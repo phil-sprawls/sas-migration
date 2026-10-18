@@ -1,0 +1,25 @@
+id: FRONTIER-RANK-01
+family: proc-rank
+hazards: []
+title: PROC RANK descending with TIES=MEAN by group; missing values get missing ranks
+reference: SAS 9.4 Base SAS Procedures Guide, RANK procedure
+expect_unsupported: true
+sas: |
+  proc rank data=scores out=ranked ties=mean descending;
+    by grp;
+    var score;
+    ranks rnk;
+  run;
+inputs:
+  scores: {columns: {grp: char(1), id: num, score: num}, rows: [['A', 1, 90], ['A', 2, 80], ['A', 3, 90], ['A', 4, null], ['B', 5, 70]]}
+expected:
+  ranked: {columns: [grp, id, score, rnk], rows: [['A', 1, 90, 1.5], ['A', 2, 80, 3], ['A', 3, 90, 1.5], ['A', 4, null, null], ['B', 5, 70, 1]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  df = ctx.get("scores")
+  w = W.partitionBy("grp").orderBy(F.col("score").desc_nulls_last())
+  ties = W.partitionBy("grp", "score")
+  df = df.withColumn("rnk", F.when(F.col("score").isNull(), F.lit(None).cast("double"))
+                     .otherwise((F.rank().over(w) + (F.count(F.lit(1)).over(ties) - 1) / 2.0).cast("double")))
+  ctx.put("ranked", df, meta={"rnk": {"type": "num", "length": 8}})

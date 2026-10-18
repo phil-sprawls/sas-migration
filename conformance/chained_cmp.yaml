@@ -1,0 +1,10 @@
+id: PARSE-CHAIN-01
+hazards: [H-MISS-CMP]
+title: chained comparison a < x < b means a < x and x < b
+reference: SAS 9.4 Language Reference Concepts, comparison operators (0 < x < 10)
+sas: |
+  data out; set in; if 1 < x < 5; run;
+inputs:
+  in: {columns: {x: num}, rows: [[0], [2], [5], [null], [4]]}
+expected:
+  out: {columns: [x], rows: [[2], [4]]}

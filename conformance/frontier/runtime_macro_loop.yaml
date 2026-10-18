@@ -1,0 +1,27 @@
+id: FRONTIER-RTMACRO-01
+family: runtime-macro
+hazards: [H-RUNTIME-MACRO]
+title: macro %DO loop bounded by a macro variable computed from the data (SELECT INTO)
+reference: SAS 9.4 Macro Language Reference, %DO statement; SQL Procedure INTO clause
+expect_unsupported: true
+sas: |
+  proc sql noprint; select count(distinct grpn) into :ngrp trimmed from src; quit;
+  %macro split;
+    %do i = 1 %to &ngrp;
+      data part&i; set src; where grpn = &i; run;
+    %end;
+  %mend split;
+  %split
+inputs:
+  src: {columns: {grpn: num, x: num}, rows: [[1, 10], [2, 20], [1, 30]]}
+expected:
+  part1: {columns: [grpn, x], rows: [[1, 10], [1, 30]]}
+  part2: {columns: [grpn, x], rows: [[2, 20]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  src = ctx.get("src")
+  n = src.where(F.col("grpn").isNotNull()).select("grpn").distinct().count()
+  ctx.symput("ngrp", n)
+  for i in range(1, n + 1):
+      ctx.put(f"part{i}", src.where(F.col("grpn") == float(i)))

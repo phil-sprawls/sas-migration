@@ -1,0 +1,26 @@
+id: FRONTIER-SQLDDL-01
+family: sql-ddl
+hazards: []
+title: PROC SQL CREATE TABLE with column definitions, INSERT ... VALUES and INSERT ... SET
+reference: SAS 9.4 SQL Procedure User's Guide, CREATE TABLE and INSERT statements
+expect_unsupported: true
+sas: |
+  proc sql;
+    create table visits (usubjid char(8), visitnum num, visit char(20));
+    insert into visits values ('01', 1, 'BASELINE') values ('01', 2, 'WEEK 2');
+    insert into visits set usubjid = '02', visitnum = 1, visit = 'BASELINE';
+  quit;
+inputs: {}
+expected:
+  visits: {columns: [usubjid, visitnum, visit], rows: [['01', 1, 'BASELINE'], ['01', 2, 'WEEK 2'], ['02', 1, 'BASELINE']]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  from pyspark.sql import types as T
+
+  rows = [("01", 1.0, "BASELINE", 0), ("01", 2.0, "WEEK 2", 1), ("02", 1.0, "BASELINE", 2)]
+  schema = T.StructType([T.StructField("usubjid", T.StringType()), T.StructField("visitnum", T.DoubleType()),
+                         T.StructField("visit", T.StringType()), T.StructField("_sas_seq", T.LongType())])
+  ctx.put("visits", spark.createDataFrame(rows, schema),
+          meta={"usubjid": {"type": "char", "length": 8}, "visitnum": {"type": "num", "length": 8},
+                "visit": {"type": "char", "length": 20}})

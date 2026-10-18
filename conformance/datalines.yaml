@@ -1,0 +1,15 @@
+id: DATALINES-01
+hazards: [H-CHAR-LEN]
+title: list input from DATALINES (character variables default to length 8)
+reference: SAS 9.4 Statements, INPUT (list input)
+sas: |
+  data out;
+    input name $ age;
+    datalines;
+  Alexandria 30
+  Bob .
+  ;
+  run;
+inputs: {}
+expected:
+  out: {columns: [name, age], rows: [['Alexandr', 30], ['Bob', null]]}

@@ -1,0 +1,23 @@
+id: H-MISS-CMP-03
+hazards: [H-MISS-CMP]
+title: IN lists with missing and character NOT IN with blanks
+reference: SAS 9.4 Language Reference Concepts, IN operator
+sas: |
+  data out1; set in; if x in (1, 2, .); run;
+  data out2; set in; if c not in ('A', 'B'); run;
+inputs:
+  in: {columns: {id: num, x: num, c: char(1)}, rows: [[1, 1, 'A'], [2, null, 'C'], [3, 3, null], [4, 2, 'B']]}
+expected:
+  out1:
+    columns: [id, x, c]
+    keys: [id]
+    rows:
+      - [1, 1, 'A']
+      - [2, null, 'C']
+      - [4, 2, 'B']
+  out2:
+    columns: [id, x, c]
+    keys: [id]
+    rows:
+      - [2, null, 'C']
+      - [3, 3, null]

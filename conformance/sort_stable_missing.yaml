@@ -1,0 +1,12 @@
+id: H-ORDER-03
+hazards: [H-ORDER]
+title: PROC SORT is stable and puts missing first (ascending) / last (descending)
+reference: SAS 9.4 Procedures, PROC SORT (EQUALS; sorting order of missing values)
+sas: |
+  proc sort data=in out=asc; by x; run;
+  proc sort data=in out=desc; by descending x; run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, 3], [2, null], [3, 1], [4, null], [5, 1]]}
+expected:
+  asc: {columns: [id, x], rows: [[2, null], [4, null], [3, 1], [5, 1], [1, 3]]}
+  desc: {columns: [id, x], rows: [[1, 3], [3, 1], [5, 1], [2, null], [4, null]]}

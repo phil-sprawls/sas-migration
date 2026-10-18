@@ -1,0 +1,10 @@
+id: OUTPUT-02
+hazards: []
+title: iterative DO loop with OUTPUT generates rows
+reference: SAS 9.4 Statements, DO (iterative) and OUTPUT
+sas: |
+  data out; set in; do i = 1 to 2; y = x * i; output; end; run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [2]]}
+expected:
+  out: {columns: [x, i, y], rows: [[1, 1, 1], [1, 2, 2], [2, 1, 2], [2, 2, 4]]}

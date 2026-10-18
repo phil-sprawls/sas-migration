@@ -1,0 +1,22 @@
+name: cdisc_adae
+description: >
+  CDISC SDTM/ADaM pilot: the sponsor's real adae.sas run against the published SDTM AE and ADaM ADSL
+  inputs, compared with the ADAE data set SAS produced (updated pilot submission package).
+ground_truth: G1
+program: ../corpus/cdisc-pilot/programs/adae.sas
+libnames:
+  sdtmnew: sasfiles:../corpus/cdisc-pilot/sdtm
+  adamnew: sasfiles:../corpus/cdisc-pilot/adam
+outputs:
+  - dataset: adamnew.adae
+    expected: ../corpus/cdisc-pilot/adam/adae.xpt
+    keys: [USUBJID, AESEQ]
+    column_map: {ADURN: ADUR}
+    ignore: [ADURU]
+    deviations:
+      - >-
+        Program/data version drift in the public package: the shipped adae.xpt comes from a later revision
+        of adae.sas that renamed ADUR to ADURN and added the unit ADURU ('DAYS'). ADURN is compared with
+        the program's ADUR; ADURU is not produced by this program version.
+decimals: 2
+as_of: "2013-01-01"

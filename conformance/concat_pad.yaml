@@ -1,0 +1,20 @@
+id: H-CONCAT-PAD-01
+hazards: [H-CONCAT-PAD, H-TRIM-BLANK]
+title: '|| keeps trailing blanks; TRIM of a blank value is one blank'
+reference: SAS 9.4 Functions, TRIM ("If the argument is blank, TRIM returns one blank"); concatenation operator
+sas: |
+  data out; set in;
+    length a $5 c $10;
+    a = s;
+    c = a || '|';
+    t = trim(e) || trim(s);
+  run;
+inputs:
+  in: {columns: {id: num, s: char(5), e: char(5)}, rows: [[1, 'ab', null], [2, 'abcde', 'x']]}
+expected:
+  out:
+    columns: [id, s, e, a, c, t]
+    keys: [id]
+    rows:
+      - [1, 'ab', null, 'ab', 'ab   |', ' ab']
+      - [2, 'abcde', 'x', 'abcde', 'abcde|', 'xabcde']

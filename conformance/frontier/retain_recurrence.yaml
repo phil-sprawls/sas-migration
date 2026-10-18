@@ -1,0 +1,32 @@
+id: FRONTIER-RETAIN-01
+family: retain-recurrence
+hazards: [H-MISS-CMP, H-MISS-ARITH]
+title: retained state with a data-dependent recurrence (episode numbering on gaps > 7 days)
+reference: SAS 9.4 Statements Reference, RETAIN statement; sum statement
+expect_unsupported: true
+sas: |
+  data out; set ex; by usubjid;
+    retain episode lastend;
+    if first.usubjid then do; episode = 1; lastend = aendy; end;
+    else do;
+      if astdy - lastend > 7 then episode + 1;
+      lastend = max(lastend, aendy);
+    end;
+  run;
+inputs:
+  ex: {columns: {usubjid: char(4), astdy: num, aendy: num}, rows: [['01', 1, 5], ['01', 8, 10], ['01', 20, 25], ['01', 26, 30], ['02', 5, null], ['02', 20, 22]]}
+expected:
+  out:
+    columns: [usubjid, astdy, aendy, episode, lastend]
+    rows: [['01', 1, 5, 1, 5], ['01', 8, 10, 1, 10], ['01', 20, 25, 2, 25], ['01', 26, 30, 2, 30], ['02', 5, null, 1, null], ['02', 20, 22, 1, 22]]
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  df = ctx.get("ex")
+  upto = W.partitionBy("usubjid").orderBy("_sas_seq").rowsBetween(W.unboundedPreceding, W.currentRow)
+  before = W.partitionBy("usubjid").orderBy("_sas_seq").rowsBetween(W.unboundedPreceding, -1)
+  gap = F.col("astdy") - F.max("aendy").over(before)          # missing when either side is missing
+  df = df.withColumn("_inc", F.when(gap > 7, 1.0).otherwise(0.0))
+  df = df.withColumn("episode", 1.0 + F.sum("_inc").over(upto)).drop("_inc")
+  df = df.withColumn("lastend", F.max("aendy").over(upto))
+  ctx.put("out", df, meta={"episode": {"type": "num", "length": 8}, "lastend": {"type": "num", "length": 8}})

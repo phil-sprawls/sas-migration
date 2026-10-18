@@ -1,0 +1,15 @@
+id: H-CHAR-LEN-01
+hazards: [H-CHAR-LEN]
+title: character length is fixed by the first assignment ('NO' stored as 'N')
+reference: SAS 9.4 Language Reference Concepts, Length of character variables
+sas: |
+  data out; set in; if x > 0 then flag = 'Y'; else flag = 'NO'; run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, 1], [2, -1]]}
+expected:
+  out:
+    columns: [id, x, flag]
+    keys: [id]
+    rows:
+      - [1, 1, 'Y']
+      - [2, -1, 'N']

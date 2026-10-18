@@ -1,0 +1,9 @@
+id: H-MACRO-EXTERNAL-02
+hazards: [H-MACRO-EXTERNAL]
+title: a macro variable nothing defines is never frozen into the conversion (SAS would compare to the text '&region')
+reference: 'SAS 9.4 Macro Language Reference, "WARNING: Apparent symbolic reference not resolved"'
+expect_unsupported: true
+sas: |
+  data a; set in; where region = "&region"; run;
+inputs:
+  in: {columns: {id: num, region: char(8)}, rows: [[1, 'EAST']]}

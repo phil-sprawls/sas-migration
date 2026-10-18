@@ -1,0 +1,10 @@
+id: H-RETAIN-02
+hazards: [H-ORDER, H-MISS-ARITH]
+title: sum statement running total ignores missing values
+reference: SAS 9.4 Statements, sum statement
+sas: |
+  data out; set in; total + x; run;
+inputs:
+  in: {columns: {x: num}, rows: [[1], [null], [3]]}
+expected:
+  out: {columns: [x, total], rows: [[1, 1], [null, 1], [3, 4]]}

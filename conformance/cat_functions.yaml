@@ -1,0 +1,19 @@
+id: FUNC-CAT-01
+hazards: [H-AUTOCONV]
+title: CATS strips arguments; CATX skips blank and missing arguments; numbers via BEST12.
+reference: SAS 9.4 Functions, CATS and CATX
+sas: |
+  data out; set in;
+    s1 = cats(a, n, 'y');
+    s2 = catx('-', a, b, n);
+  run;
+inputs:
+  in: {columns: {id: num, a: char(5), b: char(5), n: num}, rows: [[1, ' x ', null, 3], [2, 'p', 'q', null], [3, 'r', 's', 1.5]]}
+expected:
+  out:
+    columns: [id, a, b, n, s1, s2]
+    keys: [id]
+    rows:
+      - [1, ' x', '', 3, 'x3y', 'x-3']
+      - [2, 'p', 'q', null, 'p.y', 'p-q']
+      - [3, 'r', 's', 1.5, 'r1.5y', 'r-s-1.5']

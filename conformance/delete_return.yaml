@@ -1,0 +1,10 @@
+id: CONTROL-01
+hazards: []
+title: DELETE drops the row; RETURN outputs it without running later statements
+reference: SAS 9.4 Statements, DELETE / RETURN
+sas: |
+  data out; set in; if x < 0 then delete; if x = 0 then return; y = 1; run;
+inputs:
+  in: {columns: {x: num}, rows: [[-1], [0], [5]]}
+expected:
+  out: {columns: [x, y], rows: [[0, null], [5, 1]]}

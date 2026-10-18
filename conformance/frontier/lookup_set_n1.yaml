@@ -1,0 +1,23 @@
+id: FRONTIER-MULTISET-01
+family: multi-set
+hazards: []
+title: one-row lookup with IF _N_=1 THEN SET (values read by SET are retained on every row)
+reference: SAS 9.4 Language Reference Concepts, reading a data set conditionally with multiple SET statements
+expect_unsupported: true
+sas: |
+  proc means data=lab noprint; var aval; output out=stats mean=mu; run;
+  data out; set lab; if _n_ = 1 then set stats(keep=mu); pct = aval / mu * 100; run;
+inputs:
+  lab: {columns: {usubjid: char(4), aval: num}, rows: [['01', 10], ['02', 20], ['03', 30], ['04', null]]}
+expected:
+  out: {columns: [usubjid, aval, mu, pct], rows: [['01', 10, 20, 50], ['02', 20, 20, 100], ['03', 30, 20, 150], ['04', null, 20, null]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  lab = ctx.get("lab")
+  mu = lab.agg(F.avg("aval")).first()[0]
+  ctx.put("stats", spark.range(1).select(F.lit(0.0).alias("_TYPE_"), F.lit(float(lab.where(F.col("aval").isNotNull()).count())).alias("_FREQ_"),
+                                         F.lit(mu).cast("double").alias("mu")))
+  df = lab.withColumn("mu", F.lit(mu).cast("double"))
+  df = df.withColumn("pct", S.div(F.col("aval"), F.col("mu")) * F.lit(100.0))
+  ctx.put("out", df, meta={"mu": {"type": "num", "length": 8}, "pct": {"type": "num", "length": 8}})

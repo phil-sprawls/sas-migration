@@ -1,0 +1,13 @@
+id: H-RUNTIME-MACRO-03
+hazards: [H-RUNTIME-MACRO]
+family: run-time macro value in a quoted string
+title: a SELECT INTO value with an apostrophe inside a PROC SQL string literal (data, never SQL code)
+reference: SAS 9.4 SQL Procedure User's Guide, INTO clause; Macro Language Reference, quoted strings
+sas: |
+  proc sql noprint; select region into :r trimmed from in where id = 3; quit;
+  proc sql; create table s as select id, region from in where region = "&r"; quit;
+inputs:
+  in: {columns: {id: num, region: char(8)}, rows: [[1, 'EAST'], [2, 'WEST'], [3, "O'NEIL"]]}
+expected:
+  s: {columns: [id, region], rows: [[3, "O'NEIL"]]}
+expected_runtime_macros: {R: "O'NEIL"}

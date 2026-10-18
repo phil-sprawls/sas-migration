@@ -1,0 +1,27 @@
+id: FRONTIER-UNIVARIATE-01
+family: stat-proc
+hazards: [H-PCTL]
+title: PROC UNIVARIATE OUTPUT OUT= with PCTLPTS (PCTLDEF=5) by group, missing values excluded
+reference: SAS 9.4 Base SAS Procedures Guide - Statistical Procedures, UNIVARIATE OUTPUT statement
+expect_unsupported: true
+sas: |
+  proc univariate data=lab noprint;
+    by param;
+    var aval;
+    output out=pctl mean=mean pctlpts=10 90 pctlpre=P;
+  run;
+inputs:
+  lab:
+    columns: {param: char(4), aval: num}
+    rows: [['A', 1], ['A', 2], ['A', 3], ['A', 4], ['A', 5], ['A', 6], ['A', 7], ['A', 8], ['A', 9], ['A', 10],
+           ['B', 3], ['B', null], ['B', 7], ['B', 1]]
+expected:
+  pctl: {columns: [param, mean, p10, p90], rows: [['A', 5.5, 1.5, 9.5], ['B', 3.6666667, 1, 7]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  lab = ctx.get("lab")
+  out = P.means(lab, var=["aval"], stats=["MEAN", "P10", "P90"], by=["param"],
+                names={("MEAN", "aval"): "mean", ("P10", "aval"): "P10", ("P90", "aval"): "P90"})
+  out = out.drop(*[c for c in out.columns if c.upper() in ("_TYPE_", "_FREQ_")])
+  ctx.put("pctl", out)

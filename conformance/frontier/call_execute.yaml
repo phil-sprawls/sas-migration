@@ -1,0 +1,24 @@
+id: FRONTIER-EXECUTE-01
+family: call-execute
+hazards: [H-RUNTIME-MACRO]
+title: CALL EXECUTE generates one DATA step per distinct value (outputs depend on the data)
+reference: SAS 9.4 Macro Language Reference, CALL EXECUTE routine
+expect_unsupported: true
+sas: |
+  proc sort data=src(keep=grp) out=grps nodupkey; by grp; run;
+  data _null_;
+    set grps;
+    call execute(cats('data out_', grp, '; set src; where grp = "', grp, '"; run;'));
+  run;
+inputs:
+  src: {columns: {grp: char(1), x: num}, rows: [['A', 1], ['B', 2], ['A', 3]]}
+expected:
+  out_a: {columns: [grp, x], rows: [['A', 1], ['A', 3]]}
+  out_b: {columns: [grp, x], rows: [['B', 2]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  src = ctx.get("src")
+  ctx.put("grps", src.select("grp").dropDuplicates().orderBy("grp"))
+  for (g,) in src.select("grp").distinct().orderBy("grp").collect():
+      ctx.put(f"out_{g}", src.where(F.col("grp") == g))

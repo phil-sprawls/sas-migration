@@ -1,0 +1,23 @@
+id: FMT-INPUT-01
+hazards: [H-INVALID-DATA]
+title: INPUT with date/numeric informats; invalid values become missing; implied decimals
+reference: SAS 9.4 Informats, YYMMDDw. / DATEw. / COMMAw.d / w.d (implied decimal places)
+sas: |
+  data out; set in;
+    d1 = input('2020-01-15', yymmdd10.);
+    d2 = input('15JAN2020', date9.);
+    d3 = input('2020-02-30', ?? yymmdd10.);
+    n1 = input('1,234', comma8.);
+    n2 = input('abc', ?? 8.);
+    n3 = input('1234', 8.2);
+    n4 = input(s, ?? best.);
+  run;
+inputs:
+  in: {columns: {id: num, s: char(8)}, rows: [[1, '  42 '], [2, 'x']]}
+expected:
+  out:
+    columns: [id, s, d1, d2, d3, n1, n2, n3, n4]
+    keys: [id]
+    rows:
+      - [1, '  42', 21929, 21929, null, 1234, null, 12.34, 42]
+      - [2, 'x', 21929, 21929, null, 1234, null, 12.34, null]

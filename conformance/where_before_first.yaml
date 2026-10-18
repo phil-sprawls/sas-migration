@@ -1,0 +1,10 @@
+id: H-ORDER-02
+hazards: [H-ORDER]
+title: a WHERE statement filters before FIRST./LAST. are computed
+reference: SAS 9.4 Language Reference Concepts, WHERE processing vs subsetting IF
+sas: |
+  data out; set in; by g; where x > 0; f = first.g; run;
+inputs:
+  in: {columns: {g: char(1), x: num}, rows: [['A', -1], ['A', 2], ['A', 3], ['B', 4]]}
+expected:
+  out: {columns: [g, x, f], rows: [['A', 2, 1], ['A', 3, 0], ['B', 4, 1]]}

@@ -1,0 +1,16 @@
+id: SELECT-01
+hazards: []
+title: SELECT/WHEN/OTHERWISE
+reference: SAS 9.4 Statements, SELECT
+sas: |
+  data out; set in;
+    select (c);
+      when ('A') v = 1;
+      when ('B', 'C') v = 2;
+      otherwise v = 9;
+    end;
+  run;
+inputs:
+  in: {columns: {c: char(1)}, rows: [['A'], ['B'], ['C'], ['D']]}
+expected:
+  out: {columns: [c, v], rows: [['A', 1], ['B', 2], ['C', 2], ['D', 9]]}

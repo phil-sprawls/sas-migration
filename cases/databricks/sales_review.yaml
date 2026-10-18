@@ -1,0 +1,19 @@
+name: sales_review_databricks
+description: >
+  On Databricks (Unity Catalog table, serverless compute through Databricks Connect).
+  Synthetic sales-review program with a parameter file (filters, a value list, column lists, dates, text) over a
+  real public SAS data set: SASHELP.PRDSALE (productsales.sas7bdat), read with spark-sas7bdat and ingested by
+  `sas2dbx ingest` (cross-checked against pyreadstat). Run with today's parameter values (the generated parameter
+  notebook's defaults). Ground truth: independent double programming (cases/oracles/sales_review.py: pandas + pyreadstat).
+ground_truth: G3
+program: ../../examples/sales_review/report.sas
+param_module: ../../examples/sales_review/params.sas
+include_paths: [../../examples/sales_review]
+libnames:
+  sales: uc:workspace.sas2dbx_demo     # `sas2dbx publish out/ingest/sales workspace.sas2dbx_demo`
+outputs:
+  - {dataset: detail, expected: ../../corpus/oracles/sales_review/defaults/detail.parquet, mode: ordered}
+  - {dataset: summary, expected: ../../corpus/oracles/sales_review/defaults/summary.parquet, keys: [country, product]}
+  - {dataset: review, expected: ../../corpus/oracles/sales_review/defaults/review.parquet, keys: [country, product]}
+  - {dataset: flagged, expected: ../../corpus/oracles/sales_review/defaults/flagged.parquet, keys: [country, product]}
+  - {dataset: report_title, expected: ../../corpus/oracles/sales_review/defaults/report_title.parquet}

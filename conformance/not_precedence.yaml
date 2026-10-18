@@ -1,0 +1,16 @@
+id: H-NOT-PRECEDENCE-01
+hazards: [H-NOT-PRECEDENCE]
+title: NOT binds tighter than '=' in DATA step expressions
+reference: SAS 9.4 Language Reference Concepts, Order of evaluation (NOT is a group I operator)
+sas: |
+  data out; set in; r = not x = 1; run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, 0], [2, 1], [3, 5]]}
+expected:
+  out:
+    columns: [id, x, r]
+    keys: [id]
+    rows:
+      - [1, 0, 1]
+      - [2, 1, 0]
+      - [3, 5, 0]

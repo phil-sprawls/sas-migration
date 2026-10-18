@@ -1,0 +1,20 @@
+id: H-INTCK-01
+hazards: [H-INTCK]
+title: INTNX alignment and INTCK boundary counting (discrete and continuous)
+reference: SAS 9.4 Functions, INTNX / INTCK
+sas: |
+  data out;
+    n1 = intnx('month', '15JAN2020'd, 1);
+    n2 = intnx('month', '15JAN2020'd, 0, 'e');
+    n3 = intnx('year', '15JAN2020'd, 1, 's');
+    n4 = intnx('week', '15JAN2020'd, 0);
+    k1 = intck('month', '31JAN2020'd, '01FEB2020'd);
+    k2 = intck('month', '31JAN2020'd, '01FEB2020'd, 'c');
+    k3 = intck('year', '31DEC2019'd, '01JAN2020'd);
+    k4 = intck('week', '04JAN2020'd, '05JAN2020'd);
+    k5 = intck('day', '01JAN2020'd, '15JAN2020'd);
+    format n1-n4 date9.;
+  run;
+inputs: {}
+expected:
+  out: {columns: [n1, n2, n3, n4, k1, k2, k3, k4, k5], rows: [[21946, 21945, 22295, 21926, 1, 0, 1, 1, 14]]}

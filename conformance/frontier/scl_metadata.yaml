@@ -1,0 +1,35 @@
+id: FRONTIER-SCL-01
+family: scl-metadata
+hazards: [H-RUNTIME-MACRO]
+title: macro logic driven by data set metadata (%SYSFUNC OPEN / VARNUM / ATTRN)
+reference: SAS 9.4 Functions and CALL Routines, OPEN, VARNUM, ATTRN functions
+expect_unsupported: true
+sas: |
+  %macro addflag(ds);
+    %local dsid has nobs rc;
+    %let dsid = %sysfunc(open(&ds));
+    %let has = %sysfunc(varnum(&dsid, SAFFL));
+    %let nobs = %sysfunc(attrn(&dsid, nlobs));
+    %let rc = %sysfunc(close(&dsid));
+    data out; set &ds;
+      %if &has > 0 %then %do; flag = saffl; %end;
+      %else %do; flag = 'Y'; %end;
+      pct = 100 / &nobs;
+    run;
+  %mend addflag;
+  %addflag(adsl)
+inputs:
+  adsl: {columns: {usubjid: char(4), age: num}, rows: [['01', 30], ['02', 40], ['03', 50], ['04', 60]]}
+expected:
+  out: {columns: [usubjid, age, flag, pct], rows: [['01', 30, 'Y', 25], ['02', 40, 'Y', 25], ['03', 50, 'Y', 25], ['04', 60, 'Y', 25]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  adsl = ctx.get("adsl")
+  nobs = adsl.count()
+  has = "SAFFL" in [c.upper() for c in adsl.columns]
+  ctx.symput("nobs", nobs)
+  ctx.symput("has", 1 if has else 0)
+  df = adsl.withColumn("flag", F.col("saffl") if has else F.lit("Y"))
+  df = df.withColumn("pct", F.lit(100.0 / nobs if nobs else None).cast("double"))
+  ctx.put("out", df, meta={"flag": {"type": "char", "length": 1}, "pct": {"type": "num", "length": 8}})

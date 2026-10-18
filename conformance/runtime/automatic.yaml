@@ -1,0 +1,12 @@
+id: H-RUNTIME-AUTOMATIC-01
+hazards: [H-RUNTIME-AUTOMATIC]
+family: run-time automatic values
+title: '&SYSDATE9, &SYSDAY and %SYSFUNC(TODAY()) take the values of the run (validation clock: 15JAN2020)'
+reference: SAS 9.4 Macro Language Reference, automatic macro variables; %SYSFUNC
+sas: |
+  %let rd = %sysfunc(today(), yymmddn8.);
+  data out; set in; length s $30 t $10 w $12; s = "Run &sysdate9 &rd"; t = "%sysfunc(today(), date9.)"; w = "&sysday"; run;
+inputs:
+  in: {columns: {id: num}, rows: [[1]]}
+expected:
+  out: {columns: [id, s, t, w], rows: [[1, 'Run 15JAN2020 20200115', '15JAN2020', 'Wednesday']]}

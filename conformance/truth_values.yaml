@@ -1,0 +1,17 @@
+id: H-TRUTH-01
+hazards: [H-TRUTH]
+title: any non-zero, non-missing number is true
+reference: SAS 9.4 Language Reference Concepts, Logical (Boolean) expressions
+sas: |
+  data out; set in; if x then t = 1; else t = 0; run;
+inputs:
+  in: {columns: {id: num, x: num}, rows: [[1, 0], [2, null], [3, 2], [4, -1]]}
+expected:
+  out:
+    columns: [id, x, t]
+    keys: [id]
+    rows:
+      - [1, 0, 0]
+      - [2, null, 0]
+      - [3, 2, 1]
+      - [4, -1, 1]

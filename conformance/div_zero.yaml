@@ -1,0 +1,16 @@
+id: H-DIV0-01
+hazards: [H-DIV0]
+title: division by zero gives missing (never an ANSI error)
+reference: SAS 9.4 Language Reference Concepts, arithmetic operators (division by zero sets missing)
+sas: |
+  data out; set in; y = x / z; run;
+inputs:
+  in: {columns: {id: num, x: num, z: num}, rows: [[1, 4, 0], [2, 4, 2], [3, null, 2]]}
+expected:
+  out:
+    columns: [id, x, z, y]
+    keys: [id]
+    rows:
+      - [1, 4, 0, null]
+      - [2, 4, 2, 2]
+      - [3, null, 2, null]

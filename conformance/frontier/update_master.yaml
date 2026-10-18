@@ -1,0 +1,36 @@
+id: FRONTIER-UPDATE-01
+family: update-statement
+hazards: [H-BLANK]
+title: UPDATE master/transaction - missing transaction values never overwrite; new keys are appended
+reference: SAS 9.4 Statements Reference, UPDATE statement
+expect_unsupported: true
+sas: |
+  data master2; update master trans; by id; run;
+inputs:
+  master: {columns: {id: num, name: char(4), val: num}, rows: [[1, 'A', 10], [2, 'B', 20], [3, 'C', 30]]}
+  trans: {columns: {id: num, name: char(4), val: num}, rows: [[2, null, 25], [2, 'BB', null], [4, 'D', 40]]}
+expected:
+  master2: {columns: [id, name, val], rows: [[1, 'A', 10], [2, 'BB', 25], [3, 'C', 30], [4, 'D', 40]]}
+
+# Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
+reference_pyspark: |
+  # SAS applies all transactions only to the FIRST master observation of a BY group (and warns if the master has
+  # duplicate BY values); the other master observations of the group are written unchanged after it.
+  m = ctx.get("master")
+  t = ctx.get("trans")
+  m = m.withColumn("_rn", F.row_number().over(W.partitionBy("id").orderBy("_sas_seq")))
+  cols = [c for c in m.columns if c.lower() not in ("id", "_sas_seq", "_rn")]
+  u = m.where(F.col("_rn") == 1).drop("_rn").withColumn("_src", F.lit(0)).unionByName(t.withColumn("_src", F.lit(1)))
+  types = dict(u.dtypes)
+  w = W.partitionBy("id").orderBy("_src", "_sas_seq").rowsBetween(W.unboundedPreceding, W.unboundedFollowing)
+  vals = []
+  for c in cols:
+      if types[c] == "string":      # a blank (missing) transaction value never overwrites
+          vals.append(F.coalesce(F.last(F.when(F.col(c) != "", F.col(c)), ignorenulls=True).over(w), F.lit("")).alias(c))
+      else:
+          vals.append(F.last(F.col(c), ignorenulls=True).over(w).alias(c))
+  upd = (u.select("id", *vals).dropDuplicates(["id"])
+         .withColumn("_k", F.lit(0)).withColumn("_o", F.lit(0).cast("long")))
+  dups = m.where(F.col("_rn") > 1).select("id", *cols, F.lit(1).alias("_k"), F.col("_sas_seq").alias("_o"))
+  res = upd.unionByName(dups).orderBy(F.col("id").asc_nulls_first(), "_k", "_o")
+  ctx.put("master2", res.drop("_k", "_o").withColumn("_sas_seq", F.monotonically_increasing_id()))

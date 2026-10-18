@@ -1,0 +1,10 @@
+id: H-RETAIN-01
+hazards: [H-ORDER]
+title: counter reset at FIRST.g with a sum statement, output at LAST.g
+reference: SAS 9.4 Language Reference Concepts, sum statement / BY-group processing
+sas: |
+  data out; set in; by g; if first.g then n = 0; n + 1; if last.g then output; keep g n; run;
+inputs:
+  in: {columns: {g: char(1), x: num}, rows: [['A', 1], ['A', 2], ['B', 5]]}
+expected:
+  out: {columns: [g, n], rows: [['A', 2], ['B', 1]]}
