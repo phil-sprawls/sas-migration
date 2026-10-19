@@ -149,19 +149,47 @@ def cmd_convert(a) -> int:
     return 0 if st["by_status"].get("unsupported", 0) == 0 else 2
 
 
+def _llm_provider(spec: str, effort: str):
+    """The LLM behind --llm, with its credentials checked before anything is spent."""
+    from .llm.provider import load_dotenv, make_provider
+
+    load_dotenv()
+    if spec.startswith("anthropic") and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise SystemExit("ANTHROPIC_API_KEY is not set: put it in .env (gitignored), never on the command line")
+    return make_provider(spec, effort=effort)
+
+
 def cmd_validate(a) -> int:
     from . import runlog
-    from .validate.runner import ParityCase, run_case, write_result
+    from .validate.runner import ParityCase, notebook_name, run_case, write_result
 
+    if a.llm and a.as_job:
+        raise SystemExit("--llm repairs run on local Spark or through Databricks Connect, not --as-job: drop --as-job "
+                         "(--engine databricks still runs them on Databricks)")
+    provider = _llm_provider(a.llm, a.effort) if a.llm else None
     spark = local_spark(a.engine, a.profile)
     os.makedirs(a.out_dir, exist_ok=True)
+    notebooks = os.path.join(a.out_dir, "notebooks")
     cases = [ParityCase.from_yaml(path) for path in a.cases]
+
+    def local_results():
+        billed = 0.0                           # --max-usd caps the whole run, across cases
+        for case in cases:
+            budget = None if a.max_usd is None else a.max_usd - billed
+            llm = provider if budget is None or budget > 0 else None
+            if provider is not None and llm is None:
+                _log(f"{case.name}: the LLM budget (--max-usd {a.max_usd}) is spent: rules only")
+            res = run_case(case, spark, out_dir=notebooks, provider=llm, repairs=a.repair, effort=a.effort,
+                           budget_usd=budget, log=_log)
+            billed += (res.evidence.get("llm_repair") or {}).get("billed_usd", 0.0)
+            yield res
+
     if a.as_job:
         from .validate.jobs import run_cases_as_job
 
         results = run_cases_as_job(cases, spark, _job_workspace(a, spark))
     else:
-        results = (run_case(case, spark, out_dir=os.path.join(a.out_dir, "notebooks")) for case in cases)
+        results = local_results()
     failed = 0
     for case, res in zip(cases, results):
         evidence = os.path.join(a.out_dir, f"{case.name}.json")
@@ -173,6 +201,15 @@ def cmd_validate(a) -> int:
             print(f"   {c.summary()}")
         if not res.execution.get("ok"):
             print(f"   execution failed in {res.execution.get('title')}: {str(res.execution.get('error'))[:400]}")
+        rep = res.evidence.get("llm_repair")
+        if rep:
+            outcome = (f"passed on answer {rep['passed_on_answer']}" if rep["passed_on_answer"]
+                       else f"still failing (stopped: {rep['stopped']})")
+            print(f"   LLM: {len(rep['units'])} step(s), {rep['answers']} answer(s), {outcome}, "
+                  f"{runlog.usd(rep['billed_usd'])} billed")
+            if not res.passed:
+                print(f"   the last attempt is saved for a person to finish: "
+                      f"{os.path.join(notebooks, case.name, notebook_name(case) + '.py')}")
         failed += not res.passed
     return 1 if failed else 0
 
@@ -447,6 +484,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("validate", help="run parity cases (convert, execute, compare at 2 decimals)")
     s.add_argument("cases", nargs="+")
     s.add_argument("--out-dir", default="out")
+    s.add_argument("--llm", help="convert the steps the rules leave unsupported with an LLM, and send failing runs back "
+                                 "to it: anthropic[:model] | databricks:<endpoint>[@profile]")
+    s.add_argument("--repair", type=int, default=2, help="with --llm: repairs per case after the first answers (default 2)")
+    s.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    s.add_argument("--max-usd", type=float, help="with --llm: stop calling the LLM once this run has billed this much")
     engine(s)
     as_job(s)
     s.set_defaults(fn=cmd_validate)

@@ -4,7 +4,7 @@ Convert SAS programs to Databricks (PySpark notebooks) and prove each conversion
 
 - **Rules first.** A deterministic SAS front end covers the macro processor, DATA step, PROC SQL and the common PROCs. It generates readable PySpark on top of a small runtime library (`sas2dbx.runtime`) that encodes SAS semantics: missing values, BY-group processing, MERGE, RETAIN/LAG, formats and informats, and PROC FREQ/MEANS/TRANSPOSE statistics.
 - **Never approximate.** Whatever the rules can't convert exactly, they mark *unsupported*. That covers hash objects, CALL EXECUTE, run-time macro logic, `%SYSFUNC(OPEN/ATTRN/VARNUM)`, unsupported PROCs, and code that doesn't parse. An unsupported cell raises until it is converted.
-- **The LLM is optional and gated.** Claude (through the Anthropic API or Databricks Model Serving) converts only the unsupported units. Its code goes through a static guard, then the same parity gate, with a bounded repair loop.
+- **The LLM is optional and gated.** Claude (through the Anthropic API or Databricks Model Serving) converts only the unsupported units. Its code goes through a static guard, then the same parity gate, with a bounded repair loop (`validate --llm`, below).
 - **Measured, not assumed.** `sas2dbx eval` runs a golden-set bake-off that decides, per construct family, what should be deterministic and what should go to the LLM.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the semantic hazard registry.
@@ -88,6 +88,23 @@ sas2dbx ingest <dir-of-.sas7bdat> <dest> --reader spark-sas7bdat --format delta
 - **The time-zone bug:** spark-sas7bdat converts dates in the JVM time zone, so every date is a day early west of UTC. sas2dbx refuses to read with it unless the JVM runs in UTC.
 
 `examples/sales_review/` runs the whole flow end to end: a real public `.sas7bdat` (`SASHELP.PRDSALE`), a synthetic program with a parameter file, and parity against an independent oracle for today's values and a user's values.
+
+## When converted code fails: `validate --llm`
+
+```bash
+sas2dbx validate case.yaml --llm anthropic:claude-haiku-5-5 --repair 2 --max-usd 5
+```
+
+- **Conversion:** the rules convert what they can. The LLM converts the steps the rules mark unsupported, its code must pass the static guard, and then the case runs through the parity gate.
+- **Repairs:** a failing run goes back to the LLM with the problem, plus its own previous code:
+  - when the code doesn't run: the failing cell and its error;
+  - when it runs but the outputs differ: each output's differences, with a sample row.
+
+  Only the LLM-written step to blame is rewritten, and the rules' cells are never sent back. A failure in rules-written code is a converter defect, to be fixed in the rules.
+- **Stopping:** at the first pass; after `--repair` repairs (default 2, so 3 answers); or once `--max-usd` has been billed in this run.
+- **Output:** the notebook in `out/notebooks/<case>/` is the last one the LLM produced. That is the passing one, or the last attempt, left for a person to finish. The evidence file records every round under `llm_repair.history`, and the run log records the spend.
+- **Data:** sample rows are sent to the LLM unless the case sets `allow_row_samples: false`.
+- **Where it runs:** on local Spark, or through Databricks Connect with `--engine databricks`. It can't be combined with `--as-job` yet.
 
 ## Validating on Databricks
 

@@ -40,7 +40,8 @@ class UnitResult:
     attempts: int = 0
     problems: list[str] = field(default_factory=list)
     notes: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0            # what the answers cost to produce (also when replayed from the cache)
+    billed_usd: float = 0.0          # what this run spent (cache replays are free)
     seconds: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -50,6 +51,7 @@ class UnitResult:
     def add(self, comp: Completion) -> None:
         self.attempts += 1
         self.cost_usd += comp.cost_usd
+        self.billed_usd += comp.billed_usd
         self.seconds += comp.seconds
         u = comp.usage
         self.tokens_in += u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
@@ -232,3 +234,72 @@ def unit_for_problem(problem: str, llm_units: list[Unit]) -> Unit:
         if any(re.search(r"\b" + re.escape(w.split(".")[1].lower()) + r"\b", low) for w in u.writes):
             return u
     return llm_units[-1]
+
+
+# ---------------------------------------------------------------------------
+# the loop: convert, check, repair what failed, check again
+@dataclass
+class RepairOutcome:
+    ok: bool = False
+    detail: str = ""                  # the last failure ("ok" once it passed)
+    answers: int = 0                  # rounds: the first answers, then one per repair
+    gate_runs: int = 0
+    first_pass: bool = False
+    stopped: str = ""                 # why it stopped short of a pass: attempts | budget | rules
+    history: list[dict] = field(default_factory=list)
+    results: list[UnitResult] = field(default_factory=list)
+
+    @property
+    def cost_usd(self) -> float:
+        return round(sum(r.cost_usd for r in self.results), 6)
+
+    @property
+    def billed_usd(self) -> float:
+        return round(sum(r.billed_usd for r in self.results), 6)
+
+
+def convert_until_pass(conv: ConversionResult, provider: Provider, gate, *, original: str | None = None,
+                       attempts: int = 3, mode: str = "runtime", effort: str | None = None,
+                       budget_usd: float | None = None, log=None) -> tuple[ConversionResult, RepairOutcome]:
+    """Convert the unsupported units with the LLM and run ``gate(notebook) -> (ok, detail)``.  While it fails, the unit
+    to blame gets its own code back with the problem (the static guard's findings, or the gate's error or output
+    diff) and answers again, up to ``attempts`` answers in all; repairs stop early once ``budget_usd`` is billed.
+    Only LLM-written units are ever changed: a failure with no LLM unit to blame is the rules' to fix."""
+    pending = units(conv)
+    conv, results = fill_unsupported(conv, provider, original=original, mode=mode, effort=effort, log=log)
+    by_unit = {u.index: (u, r) for u, r in zip(pending, results)}
+    out = RepairOutcome(results=results)
+
+    def check(repaired: int | None) -> tuple[bool, str]:
+        rejected = [p for _, r in by_unit.values() if not r.ok for p in r.problems]
+        if rejected:
+            ok, detail = False, "rejected by the static guard: " + "; ".join(rejected)
+        else:
+            out.gate_runs += 1
+            ok, detail = gate(conv.notebook)
+        out.answers += 1
+        out.history.append({"answer": out.answers, "repaired_unit": repaired,
+                            "result": "PASS" if ok else "REJECTED" if rejected else "FAIL",
+                            "problem": None if ok else detail[:1000]})
+        return ok, detail
+
+    ok, detail = check(None)
+    out.first_pass = ok
+    while not ok:
+        if not pending:
+            out.stopped = "rules"
+            break
+        if out.answers >= attempts:
+            out.stopped = "attempts"
+            break
+        if budget_usd is not None and out.billed_usd >= budget_usd:
+            out.stopped = "budget"
+            break
+        target = next((u for u, r in by_unit.values() if not r.ok), None) or unit_for_problem(detail, pending)
+        u, rec = by_unit[target.index]
+        rec.ok = repair_unit(provider, conv, u, detail, rec, original=original, mode=mode, effort=effort)
+        if log:
+            log(f"unit {u.index}: repaired ({'accepted' if rec.ok else 'rejected'} by the static guard)")
+        ok, detail = check(target.index)
+    out.ok, out.detail = ok, "ok" if ok else detail
+    return conv, out

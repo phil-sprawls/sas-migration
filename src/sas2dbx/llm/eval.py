@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, field
 from ..runlog import usd
 from ..semantic.schema import Catalog, Schema
 from . import prompts
-from .assist import fill_unsupported, repair_unit, unit_for_problem, units
+from .assist import convert_until_pass, fill_unsupported, units
 from .guard import check_code
 from .provider import PRICES, Provider, ProviderError
 
@@ -105,16 +105,9 @@ def gate(case: GoldenCase, notebook: str, spark) -> tuple[bool, str]:
 
         r = run_conformance_notebook(case.payload, spark, notebook)
         return r.passed, r.detail
-    from ..validate.runner import run_case
+    from ..validate.runner import gate_detail, run_case
 
-    r = run_case(case.payload, spark, notebook_override=notebook)
-    if not r.execution.get("ok"):
-        return False, f"execution failed in {r.execution.get('title')}: {str(r.execution.get('error', ''))[:800]}"
-    bad = []
-    for c in r.comparisons:
-        if not c.passed:
-            bad.append(c.summary() + (f" | sample {c.samples[0]}" if c.samples else ""))
-    return (not bad and bool(r.comparisons)), "; ".join(bad)[:2000] or "ok"
+    return gate_detail(run_case(case.payload, spark, notebook_override=notebook))
 
 
 # ---------------------------------------------------------------------------
@@ -196,43 +189,16 @@ def run_trial(strategy: str, case: GoldenCase, spark, provider: Provider | None,
                 if provider is None:
                     raise RuntimeError("the hybrid strategy needs an LLM provider")
                 t.llm_units = len(pending)
-                conv, recs = fill_unsupported(conv, provider, original=case.sas, effort=effort)
-                for r in recs:
+                conv, out = convert_until_pass(conv, provider, lambda nb: gate(case, nb, spark), original=case.sas,
+                                               attempts=attempts, effort=effort)
+                for r in out.results:
                     t.llm_calls += r.attempts
                     t.cost_usd += r.cost_usd
                     t.llm_seconds += r.seconds
                     t.tokens_in += r.tokens_in
                     t.tokens_out += r.tokens_out
-                by_unit = {u.index: (u, r) for u, r in zip(pending, recs)}
-
-                def rejected() -> list[str]:
-                    return [p for _, r in by_unit.values() if not r.ok for p in r.problems]
-
-                t.attempts = 1
-                if rejected():
-                    ok, detail = False, "rejected by the static guard: " + "; ".join(rejected())
-                else:
-                    t.gate_runs += 1
-                    ok, detail = gate(case, conv.notebook, spark)
-                t.first_pass = ok
-                while not ok and t.attempts < attempts:
-                    t.attempts += 1
-                    target = next((u for u, r in by_unit.values() if not r.ok), None) or unit_for_problem(detail, pending)
-                    u, rec = by_unit[target.index]
-                    before = (rec.attempts, rec.cost_usd, rec.seconds, rec.tokens_in, rec.tokens_out)
-                    rec.ok = repair_unit(provider, conv, u, detail, rec, original=case.sas, effort=effort)
-                    t.llm_calls += rec.attempts - before[0]
-                    t.cost_usd += rec.cost_usd - before[1]
-                    t.llm_seconds += rec.seconds - before[2]
-                    t.tokens_in += rec.tokens_in - before[3]
-                    t.tokens_out += rec.tokens_out - before[4]
-                    if rejected():
-                        ok, detail = False, "rejected by the static guard: " + "; ".join(rejected())
-                        continue
-                    t.gate_runs += 1
-                    ok, detail = gate(case, conv.notebook, spark)
-                t.final_pass = ok
-                t.error = "" if ok else detail
+                t.attempts, t.gate_runs, t.first_pass, t.final_pass = out.answers, out.gate_runs, out.first_pass, out.ok
+                t.error = "" if out.ok else out.detail
                 t.code_sha = _sha(conv.notebook)
         elif strategy in ("llm_runtime", "llm_plain"):
             if provider is None:

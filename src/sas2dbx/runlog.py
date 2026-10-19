@@ -151,8 +151,10 @@ class RunLog:
         r = self.record
         r["finished_at"] = _now()
         r["seconds"] = round(time.time() - self._t0, 1)
-        r["user"] = who(databricks=self._databricks or bool(os.environ.get("SAS2DBX_RUN_LOG_VOLUME")),
-                        profile=self._profile)
+        volume = bool(os.environ.get("SAS2DBX_RUN_LOG_VOLUME"))
+        local = (os.environ.get("SAS2DBX_RUN_LOG") or DEFAULT_PATH).lower() != "off"
+        # the Databricks identity costs an API call: only when the record goes somewhere
+        r["user"] = who(databricks=(self._databricks or volume) and (local or volume), profile=self._profile)
         verdicts = [s["outcome"] for s in r["scenarios"] if s.get("outcome") in ("PASS", "FAIL", "ERROR")]
         if error is not None:
             status = "error"
@@ -293,6 +295,10 @@ def case_scenario(case, result, evidence: str | None = None, engine: str | None 
     }
     if not ok:
         d["error"] = f"{exe.get('title')}: {exe.get('error')}"[:300]
+    rep = result.evidence.get("llm_repair")
+    if rep:     # the loop's shape and spend; the failures themselves (which may quote data) stay in the evidence
+        d["llm_repair"] = {k: rep.get(k) for k in ("model", "units", "answers", "passed_on_answer", "stopped",
+                                                   "billed_usd")}
     for key in ("run_page_url", "notebooks"):
         if exe.get(key):
             d[key] = exe[key]
