@@ -180,7 +180,7 @@ DATA steps with more than 300 chained projections (macro-generated steps run to 
 - Checks schema, then row count, then rows. Row modes:
   - **keyed**: null-safe full outer join on keys.
   - **ordered**: positional, using SAS physical order against the logical order.
-  - **unordered**: multiset match on rounded fingerprints, followed by a tolerance-aware pass for rows left unmatched.
+  - **unordered**: rows are paired within groups of equal character values and equal missing-value pattern, ranked by their numeric values, then compared cell by cell with the same tolerance as keyed mode. A pairing can cause a rare false FAIL (several numeric columns tied near a rounding boundary) but never a false PASS. Prefer keys for certified outputs.
 - Reports per-column mismatch counts, max |diff| and sample mismatching rows (`allow_row_samples: false` keeps data values out of the evidence).
 - Writes one **JSON evidence file** per case: the comparisons, SHA-256 of the SAS source, the generated notebook and the expected outputs, the Spark version, ANSI mode and the parity parameters. HTML review pages are on the roadmap (11).
 

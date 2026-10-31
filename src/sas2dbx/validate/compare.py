@@ -263,30 +263,27 @@ def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) ->
             result.samples.append(d)
 
 
-def _canon(c: str, kind: str, decimals: int):
-    col = F.col(c)
-    if kind == "num":
-        return F.when(col.isNull(), F.lit("∅")).otherwise(F.format_string(f"%.{decimals}f", F.round(col, decimals) + F.lit(0.0)))
-    return col
-
-
 def _compare_unordered(exp, act, cols, kinds, opts, result: CompareResult) -> None:
-    sig_e = exp.select(F.concat_ws("␟", *[_canon(c, kinds[c], opts.decimals) for c in cols]).alias("_sig"))
-    sig_a = act.select(F.concat_ws("␟", *[_canon(c, kinds[c], opts.decimals) for c in cols]).alias("_sig"))
-    ce = sig_e.groupBy("_sig").agg(F.count(F.lit(1)).alias("ne"))
-    ca = sig_a.groupBy("_sig").agg(F.count(F.lit(1)).alias("na"))
-    j = ce.join(ca, "_sig", "full_outer").select("_sig", F.coalesce("ne", F.lit(0)).alias("ne"), F.coalesce("na", F.lit(0)).alias("na"))
-    row = j.agg(F.sum(F.greatest(F.col("ne") - F.col("na"), F.lit(0))).alias("oe"),
-                F.sum(F.greatest(F.col("na") - F.col("ne"), F.lit(0))).alias("oa"),
-                F.sum(F.least("ne", "na")).alias("both")).collect()[0]
-    result.only_in_expected = int(row["oe"] or 0)
-    result.only_in_actual = int(row["oa"] or 0)
-    result.matched_rows = int(row["both"] or 0)
-    if result.only_in_expected or result.only_in_actual:
-        result.notes.append("unordered comparison: row signatures use values rounded to the parity decimals; "
-                            "rows that straddle a rounding boundary are reported as differences — supply keys for a column-level diff")
-        if opts.allow_row_samples:
-            for r in j.where("ne <> na").limit(opts.max_samples).collect():
-                result.samples.append({"_signature": r["_sig"], "expected_count": r["ne"], "actual_count": r["na"]})
-    for c in cols:
-        result.columns.append(ColumnResult(c, kinds[c], "ok"))
+    """Rows have no identity, so pair them, then compare the pairs cell by cell with the same rule as keyed mode.
+
+    Rows can only match when their character values are equal and the same numeric columns are missing, so those
+    form the pairing group.  Within a group both sides are ranked by their numeric values (rounded to the parity
+    decimals first, so near-ties on one column defer to the next, then raw) and paired by rank.  For one numeric
+    column this pairing finds a tolerance match whenever one exists.  Every pair is checked against the tolerance,
+    so a pairing can produce a false FAIL (rare: several numeric columns tied near a rounding boundary) but never a
+    false PASS."""
+    chars = [c for c in cols if kinds[c] == "char"]
+    nums = [c for c in cols if kinds[c] == "num"]
+    nulls = (F.concat(*[F.when(F.col(c).isNull(), F.lit("1")).otherwise(F.lit("0")) for c in nums])
+             if nums else F.lit(""))
+    order = [F.round(F.col(c), opts.decimals).asc_nulls_first() for c in nums] + [F.col(c).asc_nulls_first() for c in nums]
+    w = Window.partitionBy(*chars, "_k_nulls").orderBy(*(order or [F.lit(0)]))
+
+    def ranked(df):
+        return df.withColumn("_k_nulls", nulls).withColumn("_k_rank", F.row_number().over(w))
+
+    _compare_joined(ranked(exp), ranked(act), [*chars, "_k_nulls", "_k_rank"], nums, kinds, opts, result)
+    if result.only_in_expected or result.only_in_actual or result.mismatched_columns:
+        result.notes.append("unordered comparison: rows are paired within groups of equal character values by their "
+                            "sorted numeric values; a row with no partner differs in a character value or in which "
+                            "columns are missing. Supply keys for an exact row identity.")
