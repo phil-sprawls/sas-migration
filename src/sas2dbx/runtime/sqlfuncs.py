@@ -222,9 +222,11 @@ fn("sas_max_arr", "a ARRAY<DOUBLE>", "DOUBLE", "array_max(sas_nn(a))", ("sas_nn"
 fn("sas_n_arr", "a ARRAY<DOUBLE>", "DOUBLE", "CAST(size(sas_nn(a)) AS DOUBLE)", ("sas_nn",))
 fn("sas_nmiss_arr", "a ARRAY<DOUBLE>", "DOUBLE", "CAST(size(a) - size(sas_nn(a)) AS DOUBLE)", ("sas_nn",))
 fn("sas_range_arr", "a ARRAY<DOUBLE>", "DOUBLE", "array_max(sas_nn(a)) - array_min(sas_nn(a))", ("sas_nn",))
+# The mean rides in the accumulator: newer Spark (4.3 verified) rejects a SQL UDF called inside a lambda.
 fn("sas_var_arr", "a ARRAY<DOUBLE>", "DOUBLE",
    "CASE WHEN size(sas_nn(a)) < 2 THEN NULL ELSE "
-   "aggregate(sas_nn(a), 0.0D, (acc, x) -> acc + power(x - sas_mean_arr(a), 2)) / (size(sas_nn(a)) - 1) END",
+   "aggregate(sas_nn(a), named_struct('m', sas_mean_arr(a), 's', 0.0D), "
+   "(acc, x) -> named_struct('m', acc.m, 's', acc.s + power(x - acc.m, 2)), acc -> acc.s) / (size(sas_nn(a)) - 1) END",
    ("sas_nn", "sas_mean_arr"))
 fn("sas_std_arr", "a ARRAY<DOUBLE>", "DOUBLE", "sqrt(sas_var_arr(a))", ("sas_var_arr",))
 fn("sas_median_arr", "a ARRAY<DOUBLE>", "DOUBLE",
@@ -359,8 +361,11 @@ fn("sas_ymd_parts", "x DOUBLE, y4 BOOLEAN", "ARRAY<STRING>",
    "lpad(CAST(month(sas_date(x)) AS STRING), 2, '0'), lpad(CAST(dayofmonth(sas_date(x)) AS STRING), 2, '0'))", ("sas_date",))
 fn("sas_put_ymd", "x DOUBLE, w INT, sep STRING, ord STRING", "STRING",
    "CASE WHEN x IS NULL THEN lpad('.', w, ' ') WHEN sas_date(x) IS NULL THEN repeat('*', w) "
-   "ELSE lpad(array_join(transform(split(ord, ''), c -> element_at(sas_ymd_parts(x, "
-   "CASE WHEN sep = '' THEN w >= 8 ELSE w >= 10 END), CASE c WHEN 'y' THEN 1 WHEN 'm' THEN 2 ELSE 3 END)), sep), w, ' ') END",
+   # ord is always three letters (ymd | mdy | dmy); no lambda, since newer Spark rejects SQL UDFs inside one
+   "ELSE lpad(concat_ws(sep, "
+   + ", ".join(f"element_at(sas_ymd_parts(x, CASE WHEN sep = '' THEN w >= 8 ELSE w >= 10 END), "
+               f"CASE substr(ord, {i}, 1) WHEN 'y' THEN 1 WHEN 'm' THEN 2 ELSE 3 END)" for i in (1, 2, 3))
+   + "), w, ' ') END",
    ("sas_date", "sas_ymd_parts"))
 fn("sas_put_dfmt", "x DOUBLE, w INT, pattern STRING, up BOOLEAN", "STRING",
    "CASE WHEN x IS NULL THEN lpad('.', w, ' ') WHEN sas_date(x) IS NULL THEN repeat('*', w) "
