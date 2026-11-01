@@ -21,7 +21,7 @@ metastore_db/
 derby.log
 
 # downloaded public corpora (fetched by `sas2dbx corpus fetch`, never vendored)
-corpus/
+/corpus/
 
 # generated artifacts
 logs/

@@ -1,0 +1,40 @@
+# Public SAS corpora used as ground truth and robustness tests.
+# Files are downloaded at the pinned commit into ./corpus/<name>/ and never vendored in this repository.
+sources:
+  cdisc-pilot:
+    repo: cdisc-org/sdtm-adam-pilot-project
+    commit: 667511d4b183871d74392ba691c935c38d431d39
+    license: >-
+      No licence file in the repository. CDISC SDTM/ADaM pilot submission package, published by CDISC for
+      public education/testing. Fetched locally for validation only; not redistributed.
+    files:
+      programs/adae.sas: updated-pilot-submission-package/900172/m5/datasets/cdiscpilot01/analysis/adam/programs/adae.sas
+      programs/at14-5-02.sas: updated-pilot-submission-package/900172/m5/datasets/cdiscpilot01/analysis/adam/programs/at14-5-02.sas
+    globs:
+      sdtm: updated-pilot-submission-package/900172/m5/datasets/cdiscpilot01/tabulations/sdtm/*.xpt
+      adam: updated-pilot-submission-package/900172/m5/datasets/cdiscpilot01/analysis/adam/datasets/*.xpt
+    derived:   # golden-set variants built from the fetched files after download (only the recipe is in the repo)
+      variants/at14-5-02_arms.sas:
+        from: programs/at14-5-02.sas
+        header: "/* sas2dbx golden-set variant of CDISC pilot at14-5-02.sas: arm codes changed to the data's (0/54/81). */\n"
+        replace:
+          - ["where TRTAN in (0,2);", "where TRTAN in (0,81);"]
+          - ["where TRTAN in (0,1);", "where TRTAN in (0,54);"]
+        sha256: 01114183d56a58f8a6441782e8715cb1e75fbe85b04847a3ae8c862389433b02
+  phuse-scripts:
+    repo: phuse-org/phuse-scripts
+    commit: 398a6d33ced9359ffb58c46650a6d488811176b1
+    license: MIT
+    globs:
+      code: "**/*.sas"
+      logs: "**/*.log"
+      listings: "**/*.lst"
+  public-sas7bdat:
+    repo: pandas-dev/pandas
+    commit: 0691c5cf90477d3503834d983f69350f250a6ff7   # tag v2.2.3
+    license: >-
+      BSD-3-Clause (pandas). productsales.sas7bdat is a copy of the SAS sample data set SASHELP.PRDSALE (furniture
+      sales, actual vs predicted, 1993-1994) kept in pandas' test suite. Fetched locally for validation only; not
+      redistributed.
+    files:
+      productsales.sas7bdat: pandas/tests/io/sas/data/productsales.sas7bdat
