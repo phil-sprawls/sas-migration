@@ -8,6 +8,7 @@ import re
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 
 import yaml
 
@@ -28,6 +29,7 @@ class OutputSpec:
     deviations: list[str] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)       # compare only these columns (both sides)
     metadata_ignore: list[str] = field(default_factory=list)  # order | length | format | label, with a deviation
+    control_by: list[str] = field(default_factory=list)       # report row counts per value of these columns
 
 
 @dataclass
@@ -63,7 +65,8 @@ class ParityCase:
 
         outs = [OutputSpec(o["dataset"], rel(o["expected"]), o.get("keys", []), o.get("ignore", []), o.get("mode", "auto"),
                            o.get("column_map", {}) or {}, o.get("deviations", []) or [],
-                           [c.upper() for c in o.get("columns", []) or []], o.get("metadata_ignore", []) or [])
+                           [c.upper() for c in o.get("columns", []) or []], o.get("metadata_ignore", []) or [],
+                           [c.upper() for c in o.get("control_by", []) or []])
                 for o in d.get("outputs", [])]
         return cls(
             name=d.get("name") or os.path.splitext(os.path.basename(path))[0],
@@ -204,15 +207,17 @@ def write_notebooks(case: ParityCase, conv, out_dir: str, notebook: str | None =
     return folder
 
 
-def compare_outputs(case: ParityCase, spark, get) -> list[CompareResult]:
-    """Compare every output the case checks with its ground truth; ``get(dataset)`` returns it in SAS space."""
+def compare_outputs(case: ParityCase, spark, get, review=None) -> list[CompareResult]:
+    """Compare every output the case checks with its ground truth; ``get(dataset)`` returns it in SAS space.
+    With a ``review`` sink (validate.review.ReviewSink) the reference, the output and the differences are saved
+    as tables a person can query."""
     from ..runtime.sasfile import read_sas_file
 
     comparisons: list[CompareResult] = []
     for o in case.outputs:
         opts = CompareOptions(keys=o.keys or None, decimals=case.decimals, mode=o.mode, ignore_columns=o.ignore,
                               column_map=o.column_map, allow_row_samples=case.allow_row_samples,
-                              metadata_ignore=o.metadata_ignore)
+                              metadata_ignore=o.metadata_ignore, control_by=o.control_by)
         try:
             actual = get(o.dataset)
         except KeyError as e:
@@ -228,6 +233,10 @@ def compare_outputs(case: ParityCase, spark, get) -> list[CompareResult]:
             expected = expected.select(*[c for c in expected.columns if c.upper() in keep]) if expected.columns else expected
         res = compare(expected, actual, opts, name=o.dataset)
         res.notes.extend(f"documented deviation: {d}" for d in o.deviations)
+        res.settings["expected_file"] = os.path.basename(o.expected)
+        res.settings["deviations"] = list(o.deviations)
+        if review is not None:
+            res.review = review.write_output(case.name, o.dataset, expected, actual, res)
         comparisons.append(res)
     return comparisons
 
@@ -242,6 +251,11 @@ def case_evidence(case: ParityCase, conv, notebook: str, spark, **extra) -> dict
         "decimals": case.decimals,
         "tolerance": tolerance_text(case.decimals),
         "ground_truth": case.ground_truth,
+        "description": " ".join(case.description.split()),
+        "program": os.path.basename(case.program),
+        "as_of": case.as_of,
+        "allow_row_samples": case.allow_row_samples,
+        "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **extra,
     }
 
@@ -261,7 +275,7 @@ def gate_detail(result: CaseResult) -> tuple[bool, str]:
     return (not bad and bool(result.comparisons)), "; ".join(bad)[:2000] or "ok"
 
 
-def execute_case(case: ParityCase, spark, conv, notebook: str) -> CaseResult:
+def execute_case(case: ParityCase, spark, conv, notebook: str, review=None) -> CaseResult:
     """Run one notebook for the case and compare its outputs with the ground truth: the parity gate."""
     from ..runtime.context import SasContext
 
@@ -274,7 +288,7 @@ def execute_case(case: ParityCase, spark, conv, notebook: str) -> CaseResult:
         exec(compile(params, f"{conv.param_notebook_name}.py", "exec"), pns := {})  # noqa: S102
         parameters = ns["PARAMETERS"] = pns["PARAMETERS"]
     exe = execute_notebook(notebook, ns)
-    comparisons = compare_outputs(case, spark, ctx.get) if exe["ok"] else []
+    comparisons = compare_outputs(case, spark, ctx.get, review) if exe["ok"] else []
     passed = exe["ok"] and bool(comparisons) and all(c.passed for c in comparisons)
     evidence = case_evidence(case, conv, notebook, spark, parameters=parameters,
                              sas_readers={k: {"file": f, "reader": r} for k, (f, r) in ctx.readers.items()})
@@ -283,7 +297,7 @@ def execute_case(case: ParityCase, spark, conv, notebook: str) -> CaseResult:
 
 def run_case(case: ParityCase, spark, out_dir: str | None = None, notebook_override: str | None = None, *,
              provider=None, repairs: int = 2, effort: str | None = None, budget_usd: float | None = None,
-             log=None) -> CaseResult:
+             log=None, review=None) -> CaseResult:
     """Convert the case's program, run it and compare its outputs.  With an LLM ``provider``, the steps the rules
     leave unsupported are converted by the LLM, and a failing run goes back to it with the failure, up to
     ``repairs`` times (``llm.assist.convert_until_pass``).  The notebook written to ``out_dir`` is the last one
@@ -292,24 +306,24 @@ def run_case(case: ParityCase, spark, out_dir: str | None = None, notebook_overr
 
     conv = convert_case(case, spark)
     if provider is not None and notebook_override is None and units(conv):
-        result = _run_with_llm(case, spark, conv, provider, repairs, effort, budget_usd, log)
+        result = _run_with_llm(case, spark, conv, provider, repairs, effort, budget_usd, log, review)
         notebook = conv.notebook
     else:
         notebook = notebook_override or conv.notebook
-        result = execute_case(case, spark, conv, notebook)
+        result = execute_case(case, spark, conv, notebook, review)
     if out_dir:
         write_notebooks(case, conv, out_dir, notebook)
         result.notebook = ""
     return result
 
 
-def _run_with_llm(case: ParityCase, spark, conv, provider, repairs: int, effort, budget_usd, log) -> CaseResult:
+def _run_with_llm(case: ParityCase, spark, conv, provider, repairs: int, effort, budget_usd, log, review=None) -> CaseResult:
     from ..llm.assist import convert_until_pass
 
     runs: list[CaseResult] = []
 
     def gate(notebook: str) -> tuple[bool, str]:
-        runs.append(execute_case(case, spark, conv, notebook))
+        runs.append(execute_case(case, spark, conv, notebook, review))
         return gate_detail(runs[-1])
 
     conv, out = convert_until_pass(conv, provider, gate, original=program_text(case), attempts=1 + max(0, repairs),

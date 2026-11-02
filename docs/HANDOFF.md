@@ -112,7 +112,7 @@ This document says what was built and what it has proved, how to test it in your
 | spark-sas7bdat is Scala 2.12 only | Works on Spark 3.x / Runtime ≤ 16.x classic compute only, and serverless cannot load JARs | Ingest on Runtime ≤ 16.x or on a workstation, then `publish`; or read with pyreadstat | rebuild for Scala 2.13 |
 | Python UDFs (four runtime functions: `BEST.`, `PUT`/`INPUT` with formats not compiled to SQL, `TINV`) | Slower than SQL; failed over Connect on Free Edition | Validate those cases `--as-job` | 9: SQL `BEST.` and formats |
 | Filter parameters inside `OR`/joins, column lists in PROC MEANS/FREQ, run-time table names | Marked unsupported, never guessed | LLM or manual | 6 |
-| No SAS capture kit, step-by-step fault localisation or HTML review page | Reviewers read JSON evidence | `sas2dbx runs`, evidence JSON, notebook header table | 11 |
+| No SAS capture kit or step-by-step fault localisation | Reviewers triage from the certificate and review tables | parity certificate (`sas2dbx report`), `--review-schema` tables, `sas2dbx runs` | 11 |
 | No Asset Bundle deployment template | Manual job setup | Deploy notebooks with the Databricks CLI | 10 |
 | Shared SAS format catalogs (`.sas7bcat`, `OPTIONS FMTSEARCH=`) are not read; formats defined in the program are | Formats from a catalog are unknown to the converter | Export the catalog on SAS (`PROC FORMAT CNTLOUT=`) as `PROC FORMAT` code the program includes | 13 |
 | `validate` runs cases one at a time in one process; an unexpected error stops the run, and there is no per-case time limit | Unattended batches of hundreds of programs stall or stop | Smaller batches; job mode for parallel runs | 12 |
@@ -482,7 +482,7 @@ Then CI re-validates only what each pull request changes, and Asset Bundles depl
   - compare full tables at cutover, and samples in CI.
 - **Run log at volume:** load the per-run files into a Delta table (Auto Loader), so dashboards stay fast.
 - **Sensitive data:** `allow_row_samples: false` keeps sample rows out of repair prompts and evidence. Prefer Databricks Model Serving.
-- **Reviewers:** an HTML review page per case, generated from the evidence JSON (roadmap 11).
+- **Reviewers:** a parity certificate per case (`out/<case>.html`, or `sas2dbx report`): plain-language verdict, PROC COMPARE-style summaries, control totals, deviations to accept, limits, traceability and sign-off. With `--review-schema`, the reference, output and differences are saved as tables to query, and the certificate prints the queries.
 
 ---
 
@@ -492,7 +492,7 @@ Then CI re-validates only what each pull request changes, and Asset Bundles depl
 |---|---|
 | `sas2dbx analyze <dir> [--out estate.json]` | estate inventory and readiness |
 | `sas2dbx convert <program.sas> [--out nb.py] [--libname LIB=uc:cat.schema] [--param NAME] [--define NAME=VALUE] [--param-module params.sas] [--llm anthropic\|databricks:<endpoint>]` | one program to a notebook (plus its parameter notebook) |
-| `sas2dbx validate <case.yaml>… [--engine databricks] [--as-job --schema cat.schema] [--out-dir out] [--llm anthropic\|databricks:<endpoint> [--repair N] [--max-usd X]]` | parity cases. `--llm` converts the steps the rules leave unsupported and sends failing runs back to the LLM (see the README) |
+| `sas2dbx validate <case.yaml>… [--engine databricks] [--as-job --schema cat.schema] [--out-dir out] [--review-schema cat.schema] [--llm anthropic\|databricks:<endpoint> [--repair N] [--max-usd X]]` | parity cases. `--llm` converts the steps the rules leave unsupported and sends failing runs back to the LLM (see the README) |
 | `sas2dbx conformance [--engine databricks] [--as-job --schema cat.schema] [--export-sas DIR]` | SAS-semantics suite (`--export-sas` re-baselines it on SAS) |
 | `sas2dbx eval [--strategies rules,hybrid,llm_runtime,llm_plain] [--provider …] [--only …] [--runs N] --estimate \| --yes` | LLM bake-off on the golden set |
 | `sas2dbx robust [--variants N]` | synthetic-input differential test (replays cached answers, no spend) |

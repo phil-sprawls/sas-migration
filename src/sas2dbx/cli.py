@@ -2,7 +2,8 @@
 
   sas2dbx analyze  <dir>                      estate inventory, readiness, migration waves
   sas2dbx convert  <program.sas>              rules (+ optional LLM for unsupported steps) -> notebook
-  sas2dbx validate <case.yaml>...             convert, run, compare outputs for parity (evidence JSON)
+  sas2dbx validate <case.yaml>...             convert, run, compare outputs for parity (evidence JSON + certificate)
+  sas2dbx report   <evidence.json>...         parity certificate: plain-language HTML for the people who sign off
   sas2dbx conformance                         SAS-semantics conformance suite (or --export-sas)
   sas2dbx eval                                golden-set bake-off: rules vs hybrid vs LLM
   sas2dbx ingest | publish                    SAS data sets -> Delta/Parquet -> Unity Catalog
@@ -10,7 +11,7 @@
   sas2dbx corpus fetch                        download the pinned public SAS corpus and build the golden-set inputs
   sas2dbx schema harvest <LIB> <dir>          catalog of SAS data set attributes
 
-Every command except `runs` appends a record to the run log (sas2dbx.runlog).
+Every command except `runs` and `report` appends a record to the run log (sas2dbx.runlog).
 """
 from __future__ import annotations
 
@@ -171,6 +172,7 @@ def cmd_validate(a) -> int:
     os.makedirs(a.out_dir, exist_ok=True)
     notebooks = os.path.join(a.out_dir, "notebooks")
     cases = [ParityCase.from_yaml(path) for path in a.cases]
+    review = _review_sink(a, spark)
 
     def local_results():
         billed = 0.0                           # --max-usd caps the whole run, across cases
@@ -180,20 +182,21 @@ def cmd_validate(a) -> int:
             if provider is not None and llm is None:
                 _log(f"{case.name}: the LLM budget (--max-usd {a.max_usd}) is spent: rules only")
             res = run_case(case, spark, out_dir=notebooks, provider=llm, repairs=a.repair, effort=a.effort,
-                           budget_usd=budget, log=_log)
+                           budget_usd=budget, log=_log, review=review)
             billed += (res.evidence.get("llm_repair") or {}).get("billed_usd", 0.0)
             yield res
 
     if a.as_job:
         from .validate.jobs import run_cases_as_job
 
-        results = run_cases_as_job(cases, spark, _job_workspace(a, spark))
+        results = run_cases_as_job(cases, spark, _job_workspace(a, spark), review)
     else:
         results = local_results()
     failed = 0
     for case, res in zip(cases, results):
         evidence = os.path.join(a.out_dir, f"{case.name}.json")
         write_result(res, evidence)
+        _write_certificate(evidence)
         runlog.add_scenario(runlog.case_scenario(case, res, evidence, engine=a.engine))
         verdict = "PASS" if res.passed else "FAIL"
         print(f"{verdict}  {case.name}  ({case.ground_truth})")
@@ -212,6 +215,29 @@ def cmd_validate(a) -> int:
                       f"{os.path.join(notebooks, case.name, notebook_name(case) + '.py')}")
         failed += not res.passed
     return 1 if failed else 0
+
+
+def _review_sink(a, spark):
+    """--review-schema: Unity Catalog tables on Databricks; on local Spark, Parquet under <out-dir>/review/<name>."""
+    if not a.review_schema:
+        return None
+    from .validate.review import ReviewSink
+
+    if a.engine == "databricks":
+        if a.review_schema.count(".") != 1:
+            raise SystemExit("--review-schema on Databricks is catalog.schema")
+        return ReviewSink(spark, a.review_schema)
+    return ReviewSink(spark, a.review_schema, local_dir=os.path.join(a.out_dir, "review", a.review_schema))
+
+
+def _write_certificate(evidence: str) -> None:
+    """The parity certificate (sas2dbx report) next to the evidence JSON, for the people who sign off."""
+    from .report import render
+
+    with open(evidence) as fh:
+        page = render(json.load(fh))
+    with open(os.path.splitext(evidence)[0] + ".html", "w") as fh:
+        fh.write(page)
 
 
 def _job_workspace(a, spark):
@@ -390,6 +416,22 @@ def cmd_publish(a) -> int:
     return 0
 
 
+def cmd_report(a) -> int:
+    from .report import render
+
+    for path in a.evidence:
+        with open(path) as fh:
+            d = json.load(fh)
+        out = os.path.splitext(path)[0] + ".html" if not a.out or len(a.evidence) > 1 else a.out
+        if a.out and len(a.evidence) > 1:
+            os.makedirs(a.out, exist_ok=True)
+            out = os.path.join(a.out, os.path.splitext(os.path.basename(path))[0] + ".html")
+        with open(out, "w") as fh:
+            fh.write(render(d, standalone=not a.bare))
+        print(f"{'PASS' if d.get('passed') else 'FAIL'}  {out}")
+    return 0
+
+
 def cmd_runs(a) -> int:
     from . import runlog
 
@@ -519,6 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--repair", type=int, default=2, help="with --llm: repairs per case after the first answers (default 2)")
     s.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     s.add_argument("--max-usd", type=float, help="with --llm: stop calling the LLM once this run has billed this much")
+    s.add_argument("--review-schema", metavar="CATALOG.SCHEMA",
+                   help="save review tables per output (<case>__<dataset>__sas, __dbx, __diff) for reviewers to query; "
+                        "on local Spark: Parquet under <out-dir>/review/<name>")
     engine(s)
     as_job(s)
     s.set_defaults(fn=cmd_validate)
@@ -602,6 +647,12 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--dest", default="corpus")
     f.set_defaults(fn=cmd_corpus_prepare)
 
+    s = sub.add_parser("report", help="parity certificate: a plain-language HTML page from validate's evidence JSON")
+    s.add_argument("evidence", nargs="+", help="evidence JSON written by validate (out/<case>.json)")
+    s.add_argument("--out", help="output .html (one file) or folder (several); default: next to each JSON")
+    s.add_argument("--bare", action="store_true", help="omit the <html>/<head> wrapper (to embed the page)")
+    s.set_defaults(fn=cmd_report)
+
     s = sub.add_parser("schema", help="schema catalog")
     ss = s.add_subparsers(dest="schema_cmd", required=True)
     h = ss.add_parser("harvest")
@@ -615,7 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
-    if a.cmd == "runs":                       # reading the run log is not itself a run
+    if a.cmd in ("runs", "report"):           # reading the run log or rendering evidence is not itself a run
         return a.fn(a)
     from . import runlog
 

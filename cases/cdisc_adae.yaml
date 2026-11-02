@@ -14,6 +14,7 @@ outputs:
     column_map: {ADURN: ADUR}
     ignore: [ADURU]
     metadata_ignore: [length, "label:ADURN"]
+    control_by: [TRTA, AESEV, TRTEMFL]
     deviations:
       - >-
         Character lengths in the shipped adae.xpt were trimmed to the longest value after the program ran

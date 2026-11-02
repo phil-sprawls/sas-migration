@@ -17,7 +17,9 @@ sas2dbx corpus fetch                                           # pinned public c
 sas2dbx analyze corpus/phuse-scripts --out reports/estate.json # readiness, unsupported reasons, migration waves
 sas2dbx convert corpus/cdisc-pilot/programs/adae.sas --libname SDTMNEW=sasfiles:corpus/cdisc-pilot/sdtm \
     --libname ADAMNEW=sasfiles:corpus/cdisc-pilot/adam --out out/adae.py
-sas2dbx validate cases/*.yaml                                  # convert, run, check parity -> out/*.json evidence
+sas2dbx validate cases/*.yaml                                  # convert, run, check parity -> out/*.json evidence + out/*.html certificate
+sas2dbx validate case.yaml --review-schema main.review           # also save __sas/__dbx/__diff tables for reviewers to query
+sas2dbx report out/case.json                                   # (re)render the parity certificate from evidence
 sas2dbx conformance                                            # 66 SAS-semantics cases (export with --export-sas to re-baseline on SAS)
 sas2dbx runs                                                   # run log: who ran what, scenario, outcome, LLM tokens and cost
 ```
