@@ -70,6 +70,7 @@ class ConformanceCase:
     params: list[str] = field(default_factory=list)   # run-time parameters: their macro_vars reach only the run
     param_module: str = ""            # SAS text of the %INCLUDE'd parameter file ("params.sas") -> parameter notebook
     param_values: dict = field(default_factory=dict)  # what a user typed into the parameter notebook (overrides)
+    decimals: int | None = None       # expected values transcribed rounded (e.g. from SAS printed output): relax to d
 
 
 _COL_RE = re.compile(r"^(num|char)(?:\((\d+)\))?(?::(\S+))?$")
@@ -111,6 +112,7 @@ def load_case(path: str) -> ConformanceCase:
         params=[str(p).upper() for p in d.get("params") or []],
         param_module=d.get("param_module", ""),
         param_values=dict(d.get("param_values") or {}),
+        decimals=int(d["decimals"]) if d.get("decimals") is not None else None,
     )
 
 
@@ -204,7 +206,7 @@ def case_parameters(case: ConformanceCase, conv) -> dict | None:
     return params
 
 
-def run_conformance(case: ConformanceCase, spark, decimals: int = 2) -> ConformanceResult:
+def run_conformance(case: ConformanceCase, spark, decimals: int | None = None) -> ConformanceResult:
     conv = convert_case(case)
     statuses = [s.status for s in conv.steps if s.kind != "GLOBAL"]
     if case.expect_unsupported:
@@ -233,7 +235,7 @@ def execute_case_notebook(case: ConformanceCase, spark, notebook: str, inputs: d
     return execute_notebook(notebook, env), ctx
 
 
-def run_conformance_notebook(case: ConformanceCase, spark, notebook: str, decimals: int = 2,
+def run_conformance_notebook(case: ConformanceCase, spark, notebook: str, decimals: int | None = None,
                              parameters: dict | None = None) -> ConformanceResult:
     """The parity gate for one notebook (rule-generated, LLM-generated or hand-written)."""
     from .compare import CompareOptions, compare
@@ -253,7 +255,7 @@ def run_conformance_notebook(case: ConformanceCase, spark, notebook: str, decima
         act = actual
         if case.compare_columns == "subset":
             act = actual.select(*[c for c in actual.columns if c.upper() in keep or c == "_sas_seq"])
-        res = compare(exp, act, CompareOptions(keys=t.keys or None, decimals=decimals, mode="keyed" if t.keys else "ordered"), name)
+        res = compare(exp, act, CompareOptions(keys=t.keys or None, decimals=case.decimals if decimals is None else decimals, mode="keyed" if t.keys else "ordered"), name)
         if not res.passed:
             detail = res.summary()
             if res.samples:

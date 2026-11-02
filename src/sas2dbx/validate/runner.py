@@ -14,7 +14,7 @@ import yaml
 from ..codegen.params import edit_param_notebook
 from ..codegen.program import convert
 from ..semantic.schema import Catalog
-from .compare import CompareOptions, CompareResult, compare
+from .compare import CompareOptions, CompareResult, compare, tolerance_text
 
 
 @dataclass
@@ -27,6 +27,7 @@ class OutputSpec:
     column_map: dict[str, str] = field(default_factory=dict)
     deviations: list[str] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)       # compare only these columns (both sides)
+    metadata_ignore: list[str] = field(default_factory=list)  # order | length | format | label, with a deviation
 
 
 @dataclass
@@ -37,7 +38,7 @@ class ParityCase:
     outputs: list[OutputSpec] = field(default_factory=list)
     macro_vars: dict[str, str] = field(default_factory=dict)
     as_of: str | None = None
-    decimals: int = 2
+    decimals: int | None = None       # None: strict parity; d: the reference values were rounded to d decimals
     include_paths: list[str] = field(default_factory=list)
     ground_truth: str = ""            # G1 | G2 | G3 | G4 (docs/ARCHITECTURE.md §5.8)
     description: str = ""
@@ -62,7 +63,7 @@ class ParityCase:
 
         outs = [OutputSpec(o["dataset"], rel(o["expected"]), o.get("keys", []), o.get("ignore", []), o.get("mode", "auto"),
                            o.get("column_map", {}) or {}, o.get("deviations", []) or [],
-                           [c.upper() for c in o.get("columns", []) or []])
+                           [c.upper() for c in o.get("columns", []) or []], o.get("metadata_ignore", []) or [])
                 for o in d.get("outputs", [])]
         return cls(
             name=d.get("name") or os.path.splitext(os.path.basename(path))[0],
@@ -71,7 +72,7 @@ class ParityCase:
             outputs=outs,
             macro_vars={k: str(v) for k, v in (d.get("macro_vars") or {}).items()},
             as_of=str(d["as_of"]) if d.get("as_of") else None,
-            decimals=int(d.get("decimals", 2)),
+            decimals=int(d["decimals"]) if d.get("decimals") is not None else None,
             include_paths=[rel(p) for p in d.get("include_paths", [])],
             ground_truth=d.get("ground_truth", ""),
             description=d.get("description", ""),
@@ -145,9 +146,18 @@ def _sha(path: str) -> str:
     return h.hexdigest()
 
 
+class MissingInput(FileNotFoundError):
+    """A library the case reads does not exist: without it the converter would infer schemas and fail misleadingly."""
+
+
 def build_catalog(libnames: dict[str, str], spark=None) -> Catalog:
     cat = Catalog()
     for lib, spec in libnames.items():
+        if isinstance(spec, str) and spec.startswith(("sasfiles:", "parquet:", "delta:")):
+            path = spec.split(":", 1)[1]
+            if not os.path.exists(path):
+                raise MissingInput(f"input library {lib.upper()}: {path} does not exist "
+                                   "(for the golden set run `sas2dbx corpus fetch` from the repository root)")
         if isinstance(spec, str) and spec.startswith("sasfiles:"):
             cat.harvest_dir(lib, spec[len("sasfiles:"):])
         elif isinstance(spec, str) and spec.startswith(("parquet:", "delta:")):
@@ -201,7 +211,8 @@ def compare_outputs(case: ParityCase, spark, get) -> list[CompareResult]:
     comparisons: list[CompareResult] = []
     for o in case.outputs:
         opts = CompareOptions(keys=o.keys or None, decimals=case.decimals, mode=o.mode, ignore_columns=o.ignore,
-                              column_map=o.column_map, allow_row_samples=case.allow_row_samples)
+                              column_map=o.column_map, allow_row_samples=case.allow_row_samples,
+                              metadata_ignore=o.metadata_ignore)
         try:
             actual = get(o.dataset)
         except KeyError as e:
@@ -229,7 +240,7 @@ def case_evidence(case: ParityCase, conv, notebook: str, spark, **extra) -> dict
         "spark_version": spark.version,
         "ansi_mode": spark.conf.get("spark.sql.ansi.enabled"),
         "decimals": case.decimals,
-        "tolerance": 0.5 * 10 ** (-case.decimals),
+        "tolerance": tolerance_text(case.decimals),
         "ground_truth": case.ground_truth,
         **extra,
     }

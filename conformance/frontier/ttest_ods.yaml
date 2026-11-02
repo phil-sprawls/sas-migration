@@ -7,6 +7,7 @@ expect_unsupported: true
 # The ODS TTests table also has Variable and Variances; Variable's spelling depends on how the data set was
 # created, so only the statistics and Method are compared until this case is re-baselined on SAS.
 compare_columns: subset
+decimals: 7          # expected values transcribed from SAS output printed to 7 decimals
 sas: |
   proc ttest data=vs;
     class trt;
@@ -17,8 +18,8 @@ inputs:
   vs: {columns: {trt: char(1), chg: num}, rows: [['A', 1], ['A', 2], ['A', 3], ['A', 4], ['B', 2], ['B', 4], ['B', 6], ['B', 8], ['B', 10]]}
 expected:
   tt:
-    columns: [method, tvalue, df, probt]
-    rows: [['Pooled', -2.0578066, 7, 0.0786192], ['Satterthwaite', -2.2514363, 5.5207877, 0.0691336]]
+    columns: [method, df, tvalue, probt]      # ODS TTests column order: Variable Method Variances DF tValue Probt
+    rows: [['Pooled', 7, -2.0578066, 0.0786192], ['Satterthwaite', 5.5207877, -2.2514363, 0.0691336]]
 
 # Independent double-programmed conversion: the oracle for synthetic inputs (sas2dbx robust).
 reference_pyspark: |

@@ -190,7 +190,11 @@ def merge(inputs: list[DataFrame], by, *, in_vars: list[str | None] | None = Non
     prepared = []
     col_sources: dict[str, list[int]] = {}
     order: list[str] = []
+    pdv: list[str] = []          # SAS PDV order: each input's variables in its own order, BY variables included
     for i, df in enumerate(inputs):
+        for c in visible(df):
+            if c.upper() not in pdv:
+                pdv.append(c.upper())
         upper = {c.upper(): c for c in df.columns}
         w = Window.partitionBy(*[upper[n.upper()] for n in names]).orderBy(SEQ)
         d = df.withColumn("_sas_r", F.row_number().over(w)).withColumn("_sas_cnt", F.count(F.lit(1)).over(w))
@@ -221,11 +225,12 @@ def merge(inputs: list[DataFrame], by, *, in_vars: list[str | None] | None = Non
         cond = reduce(lambda a, b: a & b, [F.col(k).eqNullSafe(F.col(f"{k}_r")) for k in knames])
         cond = cond & (F.col("_sas_rr") == F.least(F.col("_sas_r"), F.col(f"_sas_g{i}")))
         frame = frame.join(rows, on=cond, how="left").drop(*[f"{k}_r" for k in knames], "_sas_rr")
-    out_cols = [F.col(k).alias(n) for k, n in zip(knames, _first_names(inputs, names))]
+    by_cols = {n.upper(): F.col(k).alias(n) for k, n in zip(knames, _first_names(inputs, names))}
+    data_cols: dict[str, object] = {}
     for c in order:
         srcs = col_sources[c.upper()]
         if len(srcs) == 1:
-            out_cols.append(F.col(f"_sas_c{srcs[0]}_{c.upper()}").alias(c))
+            data_cols[c.upper()] = F.col(f"_sas_c{srcs[0]}_{c.upper()}").alias(c)
             continue
         # value from the source with the latest read: priority = min(r, n_i) * K + i
         K = len(inputs) + 1
@@ -235,7 +240,8 @@ def merge(inputs: list[DataFrame], by, *, in_vars: list[str | None] | None = Non
                             F.col(f"_sas_c{i}_{c.upper()}").alias("v")))
             for i in srcs
         ]
-        out_cols.append(F.greatest(*structs).getField("v").alias(c))
+        data_cols[c.upper()] = F.greatest(*structs).getField("v").alias(c)
+    out_cols = [by_cols.get(c, data_cols.get(c)) for c in pdv]
     for i, iv in enumerate(in_vars):
         if iv:
             out_cols.append(F.when(F.col(f"_sas_g{i}").isNotNull(), 1.0).otherwise(0.0).alias(iv))
@@ -384,24 +390,37 @@ def select_pdv(df: DataFrame, known: dict[str, str], drop: list[str] | None = No
                rename: dict[str, str] | None = None) -> DataFrame:
     """Output columns when the input schema was not known at conversion time.
 
-    ``known`` maps the PDV variables the converter knows (in PDV order) to 'num'/'char';
-    they come first (missing ones are created as missing values), followed by every
-    other input column the program never mentioned, minus DROP.
+    ``known`` maps the PDV variables the converter knows (in PDV order) to 'num'/'char'; missing ones are created
+    as missing values.  Every other input column the program never mentioned (minus DROP) keeps its SAS PDV
+    position: input variables enter the PDV at the SET/MERGE in the input's order, so an unseen column goes just
+    before the first known variable that follows it in the input, and before any variable the step creates after
+    reading its input.
     """
     dropset = {d.upper() for d in (drop or [])}
     rename = {k.upper(): v for k, v in (rename or {}).items()}
     present = {c.upper(): c for c in df.columns}
-    cols = []
+    known_upper = {k.upper() for k in known}
+    inputs = [c for c in df.columns if not c.startswith("_sas_")]
+    position = {c.upper(): i for i, c in enumerate(inputs)}
+    unseen = [c for c in inputs if c.upper() not in dropset and c.upper() not in known_upper]
+    cols, next_unseen, seen_input = [], 0, False
     for name, typ in known.items():
         out_name = rename.get(name.upper(), name)
+        if name.upper() not in present and seen_input:
+            # a variable the step creates after its SET/MERGE: every input variable is already in the PDV
+            cols += [F.col(f"`{c}`") for c in unseen[next_unseen:]]
+            next_unseen = len(unseen)
         if name.upper() in present:
+            seen_input = True
+            here = position.get(name.upper())
+            while here is not None and next_unseen < len(unseen) and position[unseen[next_unseen].upper()] < here:
+                cols.append(F.col(f"`{unseen[next_unseen]}`"))
+                next_unseen += 1
             cols.append(F.col(f"`{present[name.upper()]}`").alias(out_name))
         else:
             cols.append((F.lit("") if typ == "char" else F.lit(None).cast("double")).alias(out_name))
-    known_upper = {k.upper() for k in known}
-    rest = [F.col(f"`{c}`") for c in df.columns
-            if not c.startswith("_sas_") and c.upper() not in dropset and c.upper() not in known_upper]
-    return df.select(*cols, *rest, SEQ)
+    cols += [F.col(f"`{c}`") for c in unseen[next_unseen:]]
+    return df.select(*cols, SEQ)
 
 
 def dedupe_columns(df: DataFrame) -> DataFrame:

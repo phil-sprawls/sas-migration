@@ -4,6 +4,7 @@ hazards: [H-PCTL]
 title: PROC UNIVARIATE OUTPUT OUT= with PCTLPTS (PCTLDEF=5) by group, missing values excluded
 reference: SAS 9.4 Base SAS Procedures Guide - Statistical Procedures, UNIVARIATE OUTPUT statement
 expect_unsupported: true
+decimals: 7          # expected values transcribed from SAS output printed to 7 decimals (3.6666667)
 sas: |
   proc univariate data=lab noprint;
     by param;

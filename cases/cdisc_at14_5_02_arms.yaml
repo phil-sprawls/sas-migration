@@ -17,5 +17,4 @@ outputs:
   - {dataset: f2soc, expected: ../corpus/oracles/at14_5_02_arms/f2soc.parquet, keys: [AEBODSYS], columns: [AEBODSYS, Name1, nValue1]}
   - {dataset: f1sub, expected: ../corpus/oracles/at14_5_02_arms/f1sub.parquet, columns: [Name1, nValue1], mode: unordered}
   - {dataset: f2sub, expected: ../corpus/oracles/at14_5_02_arms/f2sub.parquet, columns: [Name1, nValue1], mode: unordered}
-decimals: 2
 as_of: "2013-01-01"

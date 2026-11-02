@@ -1,0 +1,53 @@
+# Every PR: the unit/conformance tests and the rules-only golden-set eval. No LLM calls, no secrets.
+# The gate: every case the rules cover must reach output data parity (frontier cases go to the LLM by design).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e '.[convert,validate,stats,dev]'
+      - name: Corpus (pinned public SAS corpus, oracles, ingested table)
+        run: sas2dbx corpus fetch
+      - name: Tests
+        run: python -m pytest -q -p no:warnings
+      - name: Golden-set eval (rules only)
+        run: sas2dbx eval --strategies rules --out reports/eval
+      - name: Gate - every covered case passes
+        run: |
+          python - <<'PY'
+          import json, sys
+          trials = json.load(open("reports/eval"))["trials"]
+          bad = [t["case"] for t in trials if not t["frontier"] and not t["final_pass"]]
+          covered = [t for t in trials if not t["frontier"]]
+          print(f"covered cases: {len(covered) - len(bad)}/{len(covered)} pass")
+          if bad:
+              sys.exit("covered cases failing parity: " + ", ".join(bad))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: |
+            reports/eval
+            reports/eval.md

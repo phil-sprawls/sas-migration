@@ -1,7 +1,7 @@
 """Golden-set bake-off: how much conversion should be deterministic, how much LLM?
 
-Every strategy is judged by the same deterministic gate - output data parity to
-2 decimals against SAS-derived expected outputs.  Primary metric: parity pass
+Every strategy is judged by the same deterministic gate - output data parity
+(``validate.compare``) against SAS-derived expected outputs.  Primary metric: parity pass
 rate (first attempt, and after the bounded repair loop).  Secondary: repair
 attempts, cost, latency, run-to-run agreement.
 
@@ -99,7 +99,7 @@ def convert_golden(case: GoldenCase):
 
 
 def gate(case: GoldenCase, notebook: str, spark) -> tuple[bool, str]:
-    """Execute the notebook against the case inputs; compare every expected output at 2 decimals."""
+    """Execute the notebook against the case inputs; compare every expected output (the parity gate)."""
     if case.kind == "conformance":
         from ..validate.conformance import run_conformance_notebook
 
