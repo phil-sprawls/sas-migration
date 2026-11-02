@@ -9,7 +9,7 @@ produces the same data** — parity to 2 decimal places — before anyone relies
 
 | Criterion | Definition |
 |---|---|
-| **Output parity** (the acceptance gate) | Every output dataset of a converted program matches the SAS output: same columns, same row multiset, character values equal after SAS normalisation, numeric values equal to 2 decimal places, i.e. `abs(a − b) < 0.005` (the standard "correct to *d* decimal places" definition, \|a−b\| < ½·10^−d). Both-missing counts as equal. |
+| **Output parity** (the acceptance gate) | Every output dataset of a converted program matches the SAS output: same columns in the same order, the same rows, character values equal after SAS normalisation, numeric values equal up to floating-point noise (`abs(a − b) < 5e-13` or `≤ 1e-9 · max(|a|, |b|)`), and the same SAS length, format and label for every column whose reference carries SAS metadata. Both-missing counts as equal. A reference whose values were rounded declares `decimals: d` (\|a−b\| < ½·10^−d), and a metadata check is dropped only by `metadata_ignore` with a documented deviation. |
 | **Traceability** | Every generated line maps back to a SAS file and line; every output dataset maps to a parity result; every LLM-produced block records model, prompt hash and iteration. |
 | **Fail loud, never silently wrong** | Constructs the rules cannot convert *faithfully* become explicit TODO stubs that raise, or go to the LLM path. In both cases they are marked unverified until they pass parity. Nothing is approximated without a recorded note. |
 | **Coverage** | DATA step ETL, PROC SQL, macro-heavy code, and STAT/reporting PROCs. The deterministic rules convert the common core, and the hybrid LLM path handles the long tail. |
@@ -152,7 +152,7 @@ DATA steps with more than 300 chained projections (macro-generated steps run to 
   - the earlier SAS steps, as context.
 
   The answer is structured JSON (`code`, `outputs`, `notes`).
-- **Gates**: a static guard runs first (syntax; no RDD API, `toPandas`, `spark.conf.set`, `eval`/`exec`/`open`; an import allowlist; must write through `ctx.put`). Then execute, then 2-decimal parity. A failure feeds a bounded repair loop with the gate's diff *summary* and one sample row. Row samples are only included when data governance allows (`allow_row_samples`), which matters for PHI and PII.
+- **Gates**: a static guard runs first (syntax; no RDD API, `toPandas`, `spark.conf.set`, `eval`/`exec`/`open`; an import allowlist; must write through `ctx.put`). Then execute, then the parity gate. A failure feeds a bounded repair loop with the gate's diff *summary* and one sample row. Row samples are only included when data governance allows (`allow_row_samples`), which matters for PHI and PII.
   - The loop is `llm.assist.convert_until_pass`, shared by `validate --llm` and `eval`.
   - The unit to blame gets back its own code and the problem: the static guard's findings, the failing cell's error, or the output differences. Rules-written cells are never sent.
   - It stops at a pass, after the allowed answers, or at the spend cap.
@@ -177,10 +177,12 @@ DATA steps with more than 300 chained projections (macro-generated steps run to 
 
 **Comparator** (Spark-native, so it scales to production tables):
 - Normalises column-name case, trims character values, treats `NULL ≡ ''` for char and `NULL ≡ NaN` for numerics, and maps date/datetime by format.
-- Checks schema, then row count, then rows. Row modes:
-  - **keyed**: null-safe full outer join on keys.
+- Checks schema, then row count, then rows, then metadata. Row modes:
+  - **keyed**: null-safe full outer join on keys. Missing key columns fail the comparison (no fallback: the keys define which rows must agree).
   - **ordered**: positional, using SAS physical order against the logical order.
   - **unordered**: rows are paired within groups of equal character values and equal missing-value pattern, ranked by their numeric values, then compared cell by cell with the same tolerance as keyed mode. A pairing can cause a rare false FAIL (several numeric columns tied near a rounding boundary) but never a false PASS. Prefer keys for certified outputs.
+- Numeric rule: strict by default (`|a − b| < 5e-13` or `≤ 1e-9` relative), so small values are compared as strictly as large ones (2 decimals would call 0.001 and 0.004 equal). Measured on the golden set: every rules output matches its reference within 1e-9 relative, so the strict rule costs nothing there. `decimals: d` relaxes it for references transcribed rounded (the two frontier STAT cases, printed to 7 decimals).
+- Metadata: column order of the shared columns always; SAS length, format and label for every column whose reference has SAS metadata (G1 `.xpt`/`.sas7bdat`). A Parquet oracle carries none, so only order is checked against it. `metadata_ignore: [check | check:COLUMN]` drops a check, with a deviation saying why (e.g. `cdisc_adae`: the published XPT's lengths were trimmed by submission packaging after the program ran).
 - Reports per-column mismatch counts, max |diff| and sample mismatching rows (`allow_row_samples: false` keeps data values out of the evidence).
 - Writes one **JSON evidence file** per case: the comparisons, SHA-256 of the SAS source, the generated notebook and the expected outputs, the Spark version, ANSI mode and the parity parameters. HTML review pages are on the roadmap (11).
 

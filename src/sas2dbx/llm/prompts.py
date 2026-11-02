@@ -44,7 +44,8 @@ Your code runs as a Databricks notebook cell (Python) with these names already d
 
 _GOAL = """\
 You convert SAS programs to PySpark for Databricks. The converted code is accepted only if every output data set
-matches what SAS produces: same rows, same columns, character values equal, numbers equal to 2 decimal places.
+matches what SAS produces: same rows, same columns in the SAS order, character values equal, numbers equal up to
+floating-point noise (relative 1e-9; never round to make values match), and the same SAS lengths, formats and labels.
 Reproduce SAS semantics exactly - including the behaviours listed under "SAS semantics that differ from Spark" -
 even where SAS behaviour looks surprising. Do not "improve" the logic.
 """

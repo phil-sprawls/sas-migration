@@ -33,7 +33,7 @@ The script does six things:
    - writes a Parquet table as Databricks users expect it: `MONTH` as a `DATE`, SAS formats and labels as column metadata, and the file's row order as `_sas_seq`.
 4. Writes the oracle's expected outputs.
 5. Converts `report.sas` with `--param-module params.sas`. It writes `out/sales_review/report.py` and the parameter notebook `out/sales_review/params.py`.
-6. Runs the parity checks on Spark 4, at 2 decimals.
+6. Runs the parity checks on Spark 4.
 
 Expected result:
 
@@ -59,7 +59,7 @@ Serverless-only workspaces, such as Databricks Free Edition, cannot load spark-s
   - With `--as-job`, the `report` and `params` notebooks run in a serverless job exactly as deployed: `%run ./params`, the user's edits in the parameter notebook, and the sas2dbx wheel installed from a volume.
 - **Without `--as-job`:** the same cases run through Databricks Connect.
 
-Result on Free Edition (Runtime 19.9): all 10 outputs match the oracle at 2 decimals, both as a job and through Databricks Connect.
+Result on Free Edition (Runtime 19.9): all 10 outputs matched the oracle (at the then 2-decimal rule), both as a job and through Databricks Connect.
 
 ## What it shows
 

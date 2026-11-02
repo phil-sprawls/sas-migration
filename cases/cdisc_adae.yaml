@@ -13,10 +13,16 @@ outputs:
     keys: [USUBJID, AESEQ]
     column_map: {ADURN: ADUR}
     ignore: [ADURU]
+    metadata_ignore: [length, "label:ADURN"]
     deviations:
+      - >-
+        Character lengths in the shipped adae.xpt were trimmed to the longest value after the program ran
+        (submission packaging): AETERM is $200 in the input ae.xpt and the program never shortens it, yet the
+        xpt has $46; even the program's explicit `length CQ01NAM $25` shows as $19. The program's own lengths
+        are what the conversion reproduces, so lengths are not compared against this reference.
       - >-
         Program/data version drift in the public package: the shipped adae.xpt comes from a later revision
         of adae.sas that renamed ADUR to ADURN and added the unit ADURU ('DAYS'). ADURN is compared with
-        the program's ADUR; ADURU is not produced by this program version.
-decimals: 2
+        the program's ADUR (its label differs with the version: 'AE Duration (N)' vs 'AE Duration (days)');
+        ADURU is not produced by this program version.
 as_of: "2013-01-01"

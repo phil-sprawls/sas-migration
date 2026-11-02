@@ -18,7 +18,7 @@ convert = ["sqlglot>=30,<31", "pyyaml>=6"]
 validate = ["pyreadstat>=1.2", "pandas>=2.0", "pyarrow>=14", "numpy>=1.24", "scipy>=1.10", "pyyaml>=6"]
 stats = ["statsmodels>=0.14", "scipy>=1.10"]
 llm = ["anthropic>=1.0", "databricks-sdk>=0.40"]
-spark = ["pyspark>=3.5.2"]
+spark = ["pyspark==4.3.0"]   # newest release that passes the test suite and the golden set; raise it only with both green
 dev = [
   "sas2dbx[convert,validate,stats,spark]",
   "pytest>=8",

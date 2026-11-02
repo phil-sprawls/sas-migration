@@ -59,7 +59,7 @@ TARGETS = pd.DataFrame([("CANADA", "SOFA", 30000.0), ("CANADA", "BED", 26000.0),
 def run(prdsale: pd.DataFrame, p: dict) -> dict[str, pd.DataFrame]:
     lo, hi = sas_date(p["start"]), sas_date(p["end"])
     keep_row = [p["rows"](r) and lo <= r.MONTH <= hi and r.COUNTRY in p["countries"] for r in prdsale.itertuples()]
-    detail = prdsale[keep_row][p["keep"]]
+    detail = prdsale[keep_row][[c for c in prdsale.columns if c in p["keep"]]]   # KEEP keeps the input order
     detail = detail.sort_values(["COUNTRY", "PRODUCT", "MONTH"], kind="mergesort")          # PROC SORT is stable
     summary = (detail.groupby(p["group"], sort=False)
                .agg(N_ROWS=("ACTUAL", "size"), ACTUAL=("ACTUAL", "sum"), PREDICT=("PREDICT", "sum")).reset_index())

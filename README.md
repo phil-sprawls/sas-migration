@@ -1,6 +1,6 @@
 # sas2dbx
 
-Convert SAS programs to Databricks (PySpark notebooks) and prove each conversion with **output data parity**: every output data set must match the SAS result, with character values equal and numbers equal to 2 decimal places (|a − b| < 0.005; two missing values count as equal).
+Convert SAS programs to Databricks (PySpark notebooks) and prove each conversion with **output data parity**: every output data set must match the SAS result, with character values equal, numbers equal up to floating-point noise (|a − b| < 5e-13 or ≤ 1e-9 × max(|a|, |b|); two missing values count as equal), the same column order, and the same SAS lengths, formats and labels wherever the reference carries them. A case whose reference values were themselves rounded (for example, copied from printed SAS output) declares `decimals: d`, which relaxes the numeric rule to |a − b| < ½·10^−d.
 
 - **Rules first.** A deterministic SAS front end covers the macro processor, DATA step, PROC SQL and the common PROCs. It generates readable PySpark on top of a small runtime library (`sas2dbx.runtime`) that encodes SAS semantics: missing values, BY-group processing, MERGE, RETAIN/LAG, formats and informats, and PROC FREQ/MEANS/TRANSPOSE statistics.
 - **Never approximate.** Whatever the rules can't convert exactly, they mark *unsupported*. That covers hash objects, CALL EXECUTE, run-time macro logic, `%SYSFUNC(OPEN/ATTRN/VARNUM)`, unsupported PROCs, and code that doesn't parse. An unsupported cell raises until it is converted.
@@ -13,11 +13,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the semantic
 
 ```bash
 uv venv && uv pip install -e '.[convert,validate,stats,dev]'   # local Spark needs Java 17 (.tools/jdk17 is picked up)
-sas2dbx corpus fetch                                           # pinned public corpus: CDISC pilot + PhUSE scripts
+sas2dbx corpus fetch                                           # pinned public corpus + golden-set oracles and ingested table
 sas2dbx analyze corpus/phuse-scripts --out reports/estate.json # readiness, unsupported reasons, migration waves
 sas2dbx convert corpus/cdisc-pilot/programs/adae.sas --libname SDTMNEW=sasfiles:corpus/cdisc-pilot/sdtm \
     --libname ADAMNEW=sasfiles:corpus/cdisc-pilot/adam --out out/adae.py
-sas2dbx validate cases/*.yaml                                  # convert, run, compare at 2 decimals -> out/*.json evidence
+sas2dbx validate cases/*.yaml                                  # convert, run, check parity -> out/*.json evidence
 sas2dbx conformance                                            # 66 SAS-semantics cases (export with --export-sas to re-baseline on SAS)
 sas2dbx runs                                                   # run log: who ran what, scenario, outcome, LLM tokens and cost
 ```
@@ -203,7 +203,7 @@ sas2dbx eval --runs 3 --yes                        # live run (needs ANTHROPIC_A
 sas2dbx eval --provider databricks:<endpoint>@sas2dbx --yes   # Claude on Databricks Model Serving
 ```
 
-Passing the gate on a case's own rows is necessary but not sufficient. A conversion can fit the rows it was checked against and still be wrong on other data. `sas2dbx robust` re-runs every conversion that passed on synthetic edge-case variants of the inputs: missing values, blanks, ties, duplicated rows and boundary numbers, with BY groups kept intact. Each conversion must agree to 2 decimals with a trusted reference. The reference is the rules conversion where the rules cover the case, otherwise the case's independent `reference_pyspark` (double programming). With SAS available, the same variants can be exported and re-baselined on SAS instead. It replays cached answers, so it never spends.
+Passing the gate on a case's own rows is necessary but not sufficient. A conversion can fit the rows it was checked against and still be wrong on other data. `sas2dbx robust` re-runs every conversion that passed on synthetic edge-case variants of the inputs: missing values, blanks, ties, duplicated rows and boundary numbers, with BY groups kept intact. Each conversion must reach parity with a trusted reference. The reference is the rules conversion where the rules cover the case, otherwise the case's independent `reference_pyspark` (double programming). With SAS available, the same variants can be exported and re-baselined on SAS instead. It replays cached answers, so it never spends.
 
 ```bash
 sas2dbx robust --variants 5                         # differential test on synthetic inputs (no LLM spend)

@@ -2,12 +2,12 @@
 
   sas2dbx analyze  <dir>                      estate inventory, readiness, migration waves
   sas2dbx convert  <program.sas>              rules (+ optional LLM for unsupported steps) -> notebook
-  sas2dbx validate <case.yaml>...             convert, run, compare outputs at 2 decimals (evidence JSON)
+  sas2dbx validate <case.yaml>...             convert, run, compare outputs for parity (evidence JSON)
   sas2dbx conformance                         SAS-semantics conformance suite (or --export-sas)
   sas2dbx eval                                golden-set bake-off: rules vs hybrid vs LLM
   sas2dbx ingest | publish                    SAS data sets -> Delta/Parquet -> Unity Catalog
   sas2dbx runs                                the run log: who ran what, scenario, outcome, LLM spend
-  sas2dbx corpus fetch                        download the pinned public SAS corpus
+  sas2dbx corpus fetch                        download the pinned public SAS corpus and build the golden-set inputs
   sas2dbx schema harvest <LIB> <dir>          catalog of SAS data set attributes
 
 Every command except `runs` appends a record to the run log (sas2dbx.runlog).
@@ -421,6 +421,36 @@ def cmd_corpus(a) -> int:
     from .corpus.fetch import fetch
 
     fetch(a.dest, only=a.only.split(",") if a.only else None, log=_log)
+    if not a.no_prepare and os.path.isdir(os.path.join("cases", "oracles")):
+        return cmd_corpus_prepare(a)
+    return 0
+
+
+# Golden-set inputs built from the fetched corpus: independent oracles (double programming) and the ingested table
+# the sales-review cases read.  Run from the repository root, after `corpus fetch`.
+ORACLES = [
+    ("cases/oracles/at14_5_02.py", ["{corpus}/cdisc-pilot/adam", "{corpus}/oracles/at14_5_02"]),
+    ("cases/oracles/at14_5_02.py", ["{corpus}/cdisc-pilot/adam", "{corpus}/oracles/at14_5_02_arms", "81", "54"]),
+    ("cases/oracles/sales_review.py", ["{corpus}/public-sas7bdat/productsales.sas7bdat", "{corpus}/oracles/sales_review"]),
+]
+
+
+def cmd_corpus_prepare(a) -> int:
+    import subprocess
+
+    from .ingest import ingest
+
+    corpus = a.dest
+    for script, args in ORACLES:
+        argv = [sys.executable, script, *[x.format(corpus=corpus) for x in args]]
+        _log("oracle: " + " ".join(argv[1:]))
+        subprocess.run(argv, check=True, stdout=subprocess.DEVNULL)
+    src = os.path.join(corpus, "public-sas7bdat")
+    if os.path.isdir(src):
+        # pyreadstat runs on any Spark; spark-sas7bdat (Spark 3.5) is the production reader, see examples/sales_review
+        ev = ingest(local_spark("local", None), src, os.path.join("out", "ingest", "sales"), reader="pyreadstat", log=_log)
+        _log(f"ingested {len(ev['tables'])} table(s) -> out/ingest/sales")
+    print("golden-set inputs ready: oracles in " + os.path.join(corpus, "oracles") + ", ingested data in out/ingest/sales")
     return 0
 
 
@@ -481,7 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--effort", default="high")
     s.set_defaults(fn=cmd_convert)
 
-    s = sub.add_parser("validate", help="run parity cases (convert, execute, compare at 2 decimals)")
+    s = sub.add_parser("validate", help="run parity cases (convert, execute, compare outputs: values, row identity and metadata)")
     s.add_argument("cases", nargs="+")
     s.add_argument("--out-dir", default="out")
     s.add_argument("--llm", help="convert the steps the rules leave unsupported with an LLM, and send failing runs back "
@@ -563,10 +593,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("corpus", help="public SAS corpus")
     cs = s.add_subparsers(dest="corpus_cmd", required=True)
-    f = cs.add_parser("fetch")
+    f = cs.add_parser("fetch", help="download the pinned corpus, then build the golden-set inputs (prepare)")
     f.add_argument("--dest", default="corpus")
     f.add_argument("--only")
+    f.add_argument("--no-prepare", action="store_true", help="download only")
     f.set_defaults(fn=cmd_corpus)
+    f = cs.add_parser("prepare", help="build the oracles and the ingested table the golden set reads")
+    f.add_argument("--dest", default="corpus")
+    f.set_defaults(fn=cmd_corpus_prepare)
 
     s = sub.add_parser("schema", help="schema catalog")
     ss = s.add_subparsers(dest="schema_cmd", required=True)
@@ -589,11 +623,17 @@ def main(argv: list[str] | None = None) -> int:
     profile = getattr(a, "profile", None) or (spec.rpartition("@")[2] if spec.startswith("databricks:") and "@" in spec
                                               else None)
     databricks = getattr(a, "engine", None) == "databricks" or a.cmd == "publish" or spec.startswith("databricks")
-    with runlog.run(a.cmd, sys.argv[1:] if argv is None else list(argv), databricks=databricks, profile=profile) as log:
-        for key in ("engine", "as_job", "schema", "llm", "provider", "strategies"):
-            if getattr(a, key, None) not in (None, False):
-                runlog.annotate(**{key: getattr(a, key)})
-        log.exit_code = a.fn(a)
+    from .validate.runner import MissingInput
+
+    try:
+        with runlog.run(a.cmd, sys.argv[1:] if argv is None else list(argv), databricks=databricks, profile=profile) as log:
+            for key in ("engine", "as_job", "schema", "llm", "provider", "strategies"):
+                if getattr(a, key, None) not in (None, False):
+                    runlog.annotate(**{key: getattr(a, key)})
+            log.exit_code = a.fn(a)
+    except MissingInput as e:
+        print(f"sas2dbx: error: {e}", file=sys.stderr)
+        return 2
     return log.exit_code
 
 

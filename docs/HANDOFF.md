@@ -10,7 +10,7 @@ This document says what was built and what it has proved, how to test it in your
 
 ## 1. Start here
 
-**sas2dbx converts SAS programs into Databricks notebooks and proves each conversion by output parity.** Every output data set of the converted notebook must match the SAS result, with character values equal and numbers equal to 2 decimal places (|a − b| < 0.005). That check is the *parity gate*.
+**sas2dbx converts SAS programs into Databricks notebooks and proves each conversion by output parity.** Every output data set of the converted notebook must match the SAS result, with character values equal, numbers equal up to floating-point noise (|a − b| < 5e-13 or ≤ 1e-9 × max(|a|, |b|); two missing values count as equal), the same column order, and the same SAS lengths, formats and labels wherever the reference carries them. That check is the *parity gate*.
 
 - A deterministic converter (the *rules*) handles everything it can convert exactly, and marks everything else *unsupported*. It never approximates.
 - Claude (an LLM) converts only the unsupported pieces, and its code must pass the same gate.
@@ -41,7 +41,7 @@ This document says what was built and what it has proved, how to test it in your
 |---|---|
 | Cover all four categories: DATA step ETL, PROC SQL, macro-heavy code, statistical and reporting PROCs | Enterprise estates mix all four. The analyzer reports readiness per program, so waves can be planned around what is hard. |
 | **Hybrid conversion:** deterministic rules first, then a pluggable LLM (Anthropic API or Databricks Model Serving) for what the rules mark unsupported | Rules are free, deterministic and reviewable. The LLM covers the long tail, and only behind the same gate. |
-| **Acceptance = output parity to 2 decimals** | A deterministic gate. "Code that runs" is not success; matching outputs are. |
+| **Acceptance = output data parity** (values, row identity, column order, SAS metadata) | A deterministic gate. "Code that runs" is not success; matching outputs are. |
 | No SAS access for the build team: public corpora plus synthetic data | Ground truth came from SAS-produced public outputs (G1) and independent double programming (G3); see §4.4. **Your team has SAS, so prefer G1 baselines from production runs.** |
 | An `%INCLUDE`d `%LET` file of user parameters becomes a separate **parameter notebook** that the program `%run`s | "If it comes from a separate file in SAS, it should come from a separate notebook in Databricks": users stay soft-gated from the code. Filters are written in Spark SQL; value and column lists are Python lists. |
 | Macro variables that nothing defines are never frozen at conversion | Values from prompts, schedulers or `-SYSPARM` must come from the run, not from the converter's environment. |
@@ -72,6 +72,7 @@ This document says what was built and what it has proved, how to test it in your
 | 2026-10-18 | Sales review against Unity Catalog | same | 2/2 cases as deployed notebooks in a job (10/10 outputs); 3/3 through Connect |
 | 2026-10-18 | Rules-only baseline on today's 67-case golden set | local | **53/67 (79.1%)**: every case the rules cover passes; the 14 frontier cases go to the LLM by design |
 | 2026-10-18 | Paid demo: one hybrid conversion (hash-object lookup) with Claude Haiku 5.5 | local | PASS on the first attempt, **$0.0031** for 13,497 tokens, recorded in the run log |
+| 2026-11-02 | Rules-only baseline under the strict parity rule (floating-point noise only, column order, SAS metadata) | local, pyspark 4.3.0 | **53/67 (79.1%)**: every covered case passes. Tightening the rule found two real defects, both fixed: MERGE put BY variables first, and columns added by a run-time parameter landed last (SAS PDV order), plus a pandas oracle with the wrong column order |
 | 2026-10-18 | Readiness of a public, macro-heavy estate (PhUSE scripts) | local | 93 programs, 2,308 steps: **52.1% of steps** and **8.6% of programs** fully converted by the rules (see note 3) |
 
 1. All the `robust` disagreements were the SAS `UPDATE` statement with duplicate master keys. In that case the reference oracle was wrong, not the LLM's code. The oracle was fixed against the SAS documentation, and hazard `H-UPDATE-DUPMASTER` plus case `FRONTIER-UPDATE-02` were added. Adding the hazard changed the LLM system prompt, so the pilot's cached answers no longer replay, and re-running the pilot costs money again (about $5 at Opus pricing).
@@ -80,7 +81,7 @@ This document says what was built and what it has proved, how to test it in your
 
 ### 2.4 What a PASS proves, and what it does not
 
-- **It proves** the converted notebook reproduces the expected outputs for the tested inputs and parameter values, to 2 decimals, with exact character values. Evidence files record the SHA-256 of the SAS source, the notebook and the expected outputs.
+- **It proves** the converted notebook reproduces the expected outputs for the tested inputs and parameter values: numbers equal up to floating-point noise, exact character values, the same column order and SAS metadata. Evidence files record the SHA-256 of the SAS source, the notebook and the expected outputs.
 - **It does not prove** correctness on other data. A conversion can fit the tested rows and still be wrong on inputs with more missing values, ties, duplicate keys or new categories. Mitigations:
   - several production cycles (§5.1);
   - several parameter value sets (§4.4);
@@ -543,7 +544,7 @@ Conformance cases (`conformance/*.yaml`) pin down one SAS behaviour each: `id`, 
 
 | Term | Meaning |
 |---|---|
-| Parity gate | the 2-decimal output comparison that decides a conversion's success |
+| Parity gate | the output comparison (values, rows, column order, SAS metadata) that decides a conversion's success |
 | G1 / G2 / G3 / G4 | ground truth: SAS outputs / SAS logs / double programming or documented semantics / synthetic edge-case data |
 | Hazard | a documented SAS-vs-Spark difference, e.g. missing values sort low in SAS (`H-MISS-CMP`) |
 | Covered / frontier | constructs the rules convert / constructs the rules route to the LLM or manual conversion by design |

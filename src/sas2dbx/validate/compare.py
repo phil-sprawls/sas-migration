@@ -1,9 +1,14 @@
-"""Spark-native data comparison with SAS-aware normalisation and decimal-parity tolerance.
+"""Spark-native data comparison with SAS-aware normalisation: output data parity.
 
-Parity rule (default ``decimals=2``): two numbers match when both are missing or
-``|a - b| < 0.5 * 10**-decimals`` — the standard definition of agreeing to *d*
-decimal places.  Character values match after right-trimming (SAS trailing
-blanks are not significant) with NULL treated as blank.
+Numeric rule (default, ``decimals=None``): two numbers match when both are missing, or when they are the same number
+up to floating-point noise: ``|a - b| < 5e-13`` or ``|a - b| <= 1e-9 * max(|a|, |b|)``.  The relative part keeps
+small values strict (0.001 and 0.004 differ) and tolerates only the last-digit noise of a different summation order.
+A case whose reference values were themselves rounded can relax this to ``decimals=d``: ``|a - b| < 0.5 * 10**-d``.
+
+Character values match after right-trimming (SAS trailing blanks are not significant) with NULL treated as blank.
+
+Metadata is part of the output: column order always, and SAS length, format and label for every column whose
+expected side carries SAS metadata.  ``metadata_ignore`` drops a check for a documented reason.
 """
 from __future__ import annotations
 
@@ -14,22 +19,48 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from ..runtime.meta import normalize_format, schema_meta
+
+STRICT_ABS = 5e-13
+STRICT_REL = 1e-9
+METADATA_CHECKS = ("order", "length", "format", "label")
+
 
 @dataclass
 class CompareOptions:
     keys: list[str] | None = None
-    decimals: int = 2
+    decimals: int | None = None         # None: strict (floating-point noise only); d: relaxed to d decimals
     rel_tol: float = 0.0
     mode: str = "auto"                  # auto | keyed | ordered | unordered
     ignore_columns: list[str] = field(default_factory=list)
     column_map: dict[str, str] = field(default_factory=dict)   # expected name -> actual name
     max_samples: int = 20
     allow_row_samples: bool = True      # False => only aggregate statistics leave the cluster (PHI/PII)
-    float_noise: float = 1e-9
+    metadata_ignore: list[str] = field(default_factory=list)   # "check" or "check:COLUMN", each with a documented reason
 
     @property
     def abs_tol(self) -> float:
-        return 0.5 * 10 ** (-self.decimals)
+        return STRICT_ABS if self.decimals is None else 0.5 * 10 ** (-self.decimals)
+
+    @property
+    def rel(self) -> float:
+        return self.rel_tol or (STRICT_REL if self.decimals is None else 0.0)
+
+    @property
+    def display_decimals(self) -> int:
+        return 2 if self.decimals is None else self.decimals
+
+    @property
+    def tolerance(self) -> str:
+        return tolerance_text(self.decimals, self.rel_tol)
+
+
+def tolerance_text(decimals: int | None, rel_tol: float = 0.0) -> str:
+    if decimals is None and not rel_tol:
+        return f"strict (|a-b| < {STRICT_ABS:g} or <= {STRICT_REL:g} relative)"
+    if decimals is None:
+        return f"|a-b| < {STRICT_ABS:g} or <= {rel_tol:g} relative"
+    return f"{decimals} decimals" + (f" or <= {rel_tol:g} relative" if rel_tol else "")
 
 
 @dataclass
@@ -57,7 +88,9 @@ class CompareResult:
     columns: list[ColumnResult] = field(default_factory=list)
     samples: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    decimals: int = 2
+    decimals: int | None = None
+    tolerance: str = ""
+    metadata: list[dict] = field(default_factory=list)   # metadata differences: {check, column?, expected, actual}
 
     @property
     def mismatched_columns(self) -> list[str]:
@@ -71,7 +104,7 @@ class CompareResult:
     def summary(self) -> str:
         if self.passed:
             return (f"PASS {self.dataset}: {self.expected_rows} rows, {len(self.columns)} columns match "
-                    f"to {self.decimals} decimals ({self.mode})")
+                    f"({self.tolerance}, {self.mode})")
         parts = []
         if self.expected_rows != self.actual_rows:
             parts.append(f"rows expected {self.expected_rows} vs actual {self.actual_rows}")
@@ -80,6 +113,12 @@ class CompareResult:
         bad = [c for c in self.columns if c.status != "ok"]
         if bad:
             parts.append("columns: " + ", ".join(f"{c.name} ({c.status}{', ' + str(c.mismatches) if c.mismatches else ''})" for c in bad[:12]))
+        if self.metadata:
+            parts.append("metadata: " + ", ".join(
+                f"{m['check']}{' ' + m['column'] if m.get('column') else ''} expected {m['expected']!r} actual {m['actual']!r}"
+                for m in self.metadata[:8]))
+        if not parts and self.notes:
+            parts.append(self.notes[-1])
         return f"FAIL {self.dataset}: " + "; ".join(parts)
 
 
@@ -115,9 +154,17 @@ def normalize(df: DataFrame) -> DataFrame:
 def _num_mismatch(a, b, opts: CompareOptions):
     diff = F.abs(a - b)
     within = diff < F.lit(opts.abs_tol)
-    if opts.rel_tol:
-        within = within | (diff <= F.lit(opts.rel_tol) * F.greatest(F.abs(a), F.abs(b)))
+    if opts.rel:
+        within = within | (diff <= F.lit(opts.rel) * F.greatest(F.abs(a), F.abs(b)))
     return F.when(a.isNull() & b.isNull(), F.lit(False)).when(a.isNull() | b.isNull(), F.lit(True)).otherwise(~within)
+
+
+def _within(ev, av, opts: CompareOptions) -> bool:
+    """The numeric rule on two Python values (for samples)."""
+    if ev is None or av is None:
+        return ev is None and av is None
+    d = abs(ev - av)
+    return d < opts.abs_tol or (bool(opts.rel) and d <= opts.rel * max(abs(ev), abs(av)))
 
 
 def _display_diff(a, b, decimals: int):
@@ -138,7 +185,7 @@ def compare(expected: DataFrame, actual: DataFrame, opts: CompareOptions | None 
     exp_cols = {f.name: _kind(f.dataType) for f in exp.schema.fields if f.name != "_sas_seq" and f.name not in ignore}
     act_cols = {f.name: _kind(f.dataType) for f in act.schema.fields if f.name != "_sas_seq" and f.name not in ignore}
     n_exp, n_act = exp.count(), act.count()
-    result = CompareResult(name, False, "", [], n_exp, n_act, decimals=opts.decimals)
+    result = CompareResult(name, False, "", [], n_exp, n_act, decimals=opts.decimals, tolerance=opts.tolerance)
     if n_exp == 0 and not exp_cols:
         # an empty ground truth without a schema (e.g. SAS produced no rows): only the row count is comparable
         result.mode = "row-count"
@@ -173,8 +220,9 @@ def compare(expected: DataFrame, actual: DataFrame, opts: CompareOptions | None 
     if mode == "keyed":
         missing = [k for k in keys if k not in exp_cols or k not in act_cols]
         if missing:
-            result.notes.append(f"key columns missing: {missing}; falling back to unordered comparison")
-            mode = result.mode = "unordered"
+            # the keys define which rows must agree; comparing without them would not be the same check
+            result.notes.append(f"key columns missing: {missing}; rows cannot be identified, so the outputs do not match")
+            return result
     if mode == "keyed":
         dup_e = exp.groupBy(*keys).count().where("count > 1").count()
         dup_a = act.groupBy(*keys).count().where("count > 1").count()
@@ -198,9 +246,53 @@ def compare(expected: DataFrame, actual: DataFrame, opts: CompareOptions | None 
             result.columns.append(ColumnResult(c, exp_cols[c], "ok"))
     order = list(exp_cols) + [c for c in act_cols if c not in exp_cols]
     result.columns.sort(key=lambda r: order.index(r.name) if r.name in order else 10**6)
+    result.metadata = _compare_metadata(expected, actual, list(exp_cols), list(act_cols), opts)
     result.passed = (n_exp == n_act and result.only_in_expected == 0 and result.only_in_actual == 0
-                     and all(c.status == "ok" for c in result.columns))
+                     and all(c.status == "ok" for c in result.columns) and not result.metadata)
     return result
+
+
+def _compare_metadata(expected: DataFrame, actual: DataFrame, exp_cols: list[str], act_cols: list[str],
+                      opts: CompareOptions) -> list[dict]:
+    """Column order of the shared columns, then SAS length, format and label where the expected side has SAS metadata.
+
+    A reference without SAS metadata (e.g. a Parquet oracle) cannot say what the formats, labels and lengths should
+    be, so only the order is checked against it."""
+    skip, skip_col = set(), set()
+    for entry in opts.metadata_ignore:
+        check, _, column = str(entry).partition(":")
+        check = check.strip().lower()
+        if check not in METADATA_CHECKS:
+            raise ValueError(f"metadata_ignore: unknown check {entry!r}; use one of {list(METADATA_CHECKS)}, "
+                             "optionally as check:COLUMN")
+        if column.strip():
+            skip_col.add((check, column.strip().upper()))
+        else:
+            skip.add(check)
+    out: list[dict] = []
+    common = [c for c in exp_cols if c in act_cols]
+    if "order" not in skip:
+        act_order = [c for c in act_cols if c in common]
+        if act_order != common:
+            out.append({"check": "order", "expected": common, "actual": act_order})
+    back = {a.upper(): e.upper() for e, a in opts.column_map.items()}
+    em = schema_meta(expected.schema)
+    am = {back.get(k, k): v for k, v in schema_meta(actual.schema).items()}
+    for c in common:
+        e = em.get(c)
+        if e is None:
+            continue
+        a = am.get(c)
+        if a is None:
+            out.append({"check": "metadata", "column": c, "expected": e.to_dict(), "actual": None})
+            continue
+        pairs = {"length": (e.length, a.length),
+                 "format": (normalize_format(e.format), normalize_format(a.format)),
+                 "label": ((e.label or "").strip() or None, (a.label or "").strip() or None)}
+        for check, (ev, av) in pairs.items():
+            if check not in skip and (check, c) not in skip_col and ev != av:
+                out.append({"check": check, "column": c, "expected": ev, "actual": av})
+    return out
 
 
 def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) -> None:
@@ -220,7 +312,7 @@ def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) ->
         if kinds[c] == "num":
             mm = both & _num_mismatch(ec, ac, opts)
             aggs.append(F.max(F.when(both, F.abs(ec - ac))).alias(f"_d__{c}"))
-            aggs.append(F.sum(F.when(both & ~_num_mismatch(ec, ac, opts) & _display_diff(ec, ac, opts.decimals), 1).otherwise(0)).alias(f"_disp__{c}"))
+            aggs.append(F.sum(F.when(both & ~_num_mismatch(ec, ac, opts) & _display_diff(ec, ac, opts.display_decimals), 1).otherwise(0)).alias(f"_disp__{c}"))
         else:
             mm = both & (ec != ac)
         flags[c] = mm
@@ -255,8 +347,7 @@ def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) ->
             for c in show:
                 ev, av = r[f"e__{c}"], r[f"a__{c}"]
                 if r["_in_e"] is not None and r["_in_a"] is not None:
-                    same = (ev == av) if kinds[c] == "char" else (
-                        (ev is None and av is None) or (ev is not None and av is not None and abs(ev - av) < opts.abs_tol))
+                    same = (ev == av) if kinds[c] == "char" else _within(ev, av, opts)
                     if same:
                         continue
                 d[c] = {"expected": ev, "actual": av}
@@ -268,7 +359,7 @@ def _compare_unordered(exp, act, cols, kinds, opts, result: CompareResult) -> No
 
     Rows can only match when their character values are equal and the same numeric columns are missing, so those
     form the pairing group.  Within a group both sides are ranked by their numeric values (rounded to the parity
-    decimals first, so near-ties on one column defer to the next, then raw) and paired by rank.  For one numeric
+    decimals, or 9 when strict, first, so near-ties on one column defer to the next, then raw) and paired by rank.  For one numeric
     column this pairing finds a tolerance match whenever one exists.  Every pair is checked against the tolerance,
     so a pairing can produce a false FAIL (rare: several numeric columns tied near a rounding boundary) but never a
     false PASS."""
@@ -276,7 +367,7 @@ def _compare_unordered(exp, act, cols, kinds, opts, result: CompareResult) -> No
     nums = [c for c in cols if kinds[c] == "num"]
     nulls = (F.concat(*[F.when(F.col(c).isNull(), F.lit("1")).otherwise(F.lit("0")) for c in nums])
              if nums else F.lit(""))
-    order = [F.round(F.col(c), opts.decimals).asc_nulls_first() for c in nums] + [F.col(c).asc_nulls_first() for c in nums]
+    order = [F.round(F.col(c), 9 if opts.decimals is None else opts.decimals).asc_nulls_first() for c in nums] + [F.col(c).asc_nulls_first() for c in nums]
     w = Window.partitionBy(*chars, "_k_nulls").orderBy(*(order or [F.lit(0)]))
 
     def ranked(df):

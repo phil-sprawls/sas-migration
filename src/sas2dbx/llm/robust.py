@@ -2,7 +2,7 @@
 
 For every golden case, synthetic variants of the inputs (``validate.fuzz``) are run
 through a trusted reference and through each strategy's conversion; outputs must
-agree to 2 decimals.  The reference is the rule-based conversion where the rules
+agree under the parity rule (``validate.compare``: strict numeric tolerance, column order, metadata).  The reference is the rule-based conversion where the rules
 cover the case (validated against SAS semantics by the conformance suite), else the
 case's independent double-programmed ``reference_pyspark``.  A disagreement means
 at least one side is wrong - each one is evidence to adjudicate, not a verdict.
@@ -136,7 +136,7 @@ def _compare_ctx(case: GoldenCase, ref_ctx, cand_ctx, input_names: set[str]) -> 
             r = r.select(*[x for x in r.columns if x.upper() in keep])
             c = c.select(*[x for x in c.columns if x.upper() in keep])
         try:
-            res = compare(r, c, CompareOptions(keys=t.keys or None, decimals=2, mode="keyed" if t.keys else "ordered"), ds)
+            res = compare(r, c, CompareOptions(keys=t.keys or None, mode="keyed" if t.keys else "ordered"), ds)
         except Exception as e:  # noqa: BLE001 - e.g. incomparable types
             problems.append(f"{ds}: comparison failed: {type(e).__name__}: {str(e)[:200]}")
             continue
