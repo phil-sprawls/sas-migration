@@ -37,6 +37,7 @@ class CompareOptions:
     max_samples: int = 20
     allow_row_samples: bool = True      # False => only aggregate statistics leave the cluster (PHI/PII)
     metadata_ignore: list[str] = field(default_factory=list)   # "check" or "check:COLUMN", each with a documented reason
+    control_by: list[str] = field(default_factory=list)        # columns whose row counts per value the report shows
 
     @property
     def abs_tol(self) -> float:
@@ -91,6 +92,9 @@ class CompareResult:
     decimals: int | None = None
     tolerance: str = ""
     metadata: list[dict] = field(default_factory=list)   # metadata differences: {check, column?, expected, actual}
+    controls: dict = field(default_factory=dict)         # control totals per side (aggregates only): see control_totals
+    settings: dict = field(default_factory=dict)         # what the comparison left out or renamed, for the report
+    review: dict = field(default_factory=dict)           # where the review tables were written (validate.review)
 
     @property
     def mismatched_columns(self) -> list[str]:
@@ -186,6 +190,8 @@ def compare(expected: DataFrame, actual: DataFrame, opts: CompareOptions | None 
     act_cols = {f.name: _kind(f.dataType) for f in act.schema.fields if f.name != "_sas_seq" and f.name not in ignore}
     n_exp, n_act = exp.count(), act.count()
     result = CompareResult(name, False, "", [], n_exp, n_act, decimals=opts.decimals, tolerance=opts.tolerance)
+    result.settings = {"ignored_columns": sorted(ignore), "column_map": {k.upper(): v.upper() for k, v in opts.column_map.items()},
+                       "metadata_ignore": list(opts.metadata_ignore), "control_by": [c.upper() for c in opts.control_by]}
     if n_exp == 0 and not exp_cols:
         # an empty ground truth without a schema (e.g. SAS produced no rows): only the row count is comparable
         result.mode = "row-count"
@@ -247,9 +253,46 @@ def compare(expected: DataFrame, actual: DataFrame, opts: CompareOptions | None 
     order = list(exp_cols) + [c for c in act_cols if c not in exp_cols]
     result.columns.sort(key=lambda r: order.index(r.name) if r.name in order else 10**6)
     result.metadata = _compare_metadata(expected, actual, list(exp_cols), list(act_cols), opts)
+    result.controls = control_totals(exp, act, [c for c in typed if exp_cols[c] == "num"],
+                                     [c.upper() for c in opts.control_by if c.upper() in typed], n_exp, n_act,
+                                     schema_meta(expected.schema))
     result.passed = (n_exp == n_act and result.only_in_expected == 0 and result.only_in_actual == 0
                      and all(c.status == "ok" for c in result.columns) and not result.metadata)
     return result
+
+
+def control_totals(exp: DataFrame, act: DataFrame, nums: list[str], by: list[str], n_exp: int, n_act: int,
+                   meta: dict | None = None, max_groups: int = 40) -> dict:
+    """Totals a person can reconcile by hand, side by side: rows, then per numeric column the count of non-missing
+    values, sum, minimum and maximum, then row counts per value of each ``by`` column.  Aggregates only, so they
+    are safe to show when row samples are not (``allow_row_samples: false``), apart from small group counts."""
+    meta = meta or {}
+
+    def stats(df):
+        if not nums:
+            return {}
+        aggs = []
+        for c in nums:
+            aggs += [F.count(c).alias(f"n__{c}"), F.sum(c).alias(f"s__{c}"), F.min(c).alias(f"lo__{c}"),
+                     F.max(c).alias(f"hi__{c}")]
+        r = df.agg(*aggs).collect()[0]
+        return {c: (r[f"n__{c}"], r[f"s__{c}"], r[f"lo__{c}"], r[f"hi__{c}"]) for c in nums}
+
+    se, sa = stats(exp), stats(act)
+    numeric = []
+    for c in nums:
+        fmt = normalize_format(meta[c].format) if c in meta else None
+        numeric.append({"column": c, "format": fmt,
+                        "expected": dict(zip(("n", "sum", "min", "max"), se[c])),
+                        "actual": dict(zip(("n", "sum", "min", "max"), sa[c]))})
+    groups = []
+    for c in by:
+        ce = {r[c]: r["count"] for r in exp.groupBy(c).count().collect()}
+        ca = {r[c]: r["count"] for r in act.groupBy(c).count().collect()}
+        values = sorted(set(ce) | set(ca), key=lambda v: (v is None, str(v)))
+        groups.append({"by": c, "truncated": len(values) > max_groups,
+                       "rows": [{"value": v, "expected": ce.get(v, 0), "actual": ca.get(v, 0)} for v in values[:max_groups]]})
+    return {"rows": {"expected": n_exp, "actual": n_act}, "numeric": numeric, "groups": groups}
 
 
 def _compare_metadata(expected: DataFrame, actual: DataFrame, exp_cols: list[str], act_cols: list[str],
@@ -332,6 +375,7 @@ def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) ->
         if m:
             bad_cols.append(c)
         result.columns.append(cr)
+    result._diff_source = (j, keys, cols, kinds, flags)     # for diff_rows(); not part of the evidence
     if opts.allow_row_samples and (bad_cols or result.only_in_actual or result.only_in_expected):
         any_bad = reduce(lambda x, y: x | y, [flags[c] for c in bad_cols], F.lit(False))
         any_bad = any_bad | F.col("_in_e").isNull() | F.col("_in_a").isNull()
@@ -352,6 +396,33 @@ def _compare_joined(exp, act, keys, cols, kinds, opts, result: CompareResult) ->
                         continue
                 d[c] = {"expected": ev, "actual": av}
             result.samples.append(d)
+
+
+_KEY_NAMES = {"_k_pos": "ROW_NUMBER", "_k_rank": "PAIR_RANK", "_k_dup": "DUP_SEQ"}
+
+
+def diff_rows(result: CompareResult) -> DataFrame | None:
+    """Every difference the comparison found, one row per differing cell, plus one per row present on only one side:
+    the row's key, ``status``, ``column_name``, ``sas_value``, ``dbx_value`` (as text) and ``difference`` (Databricks minus
+    SAS, numbers only).  The same cells the counts in ``result.columns`` count, so the two always agree.  ``None``
+    when the comparison never paired rows (missing keys, an empty reference)."""
+    src = getattr(result, "_diff_source", None)
+    if src is None:
+        return None
+    j, keys, cols, kinds, flags = src
+    key_cols = [F.col(k).alias(_KEY_NAMES.get(k, k)) for k in keys if k != "_k_nulls"]
+    none_s, none_d = F.lit(None).cast("string"), F.lit(None).cast("double")
+    parts = []
+    for c in cols:
+        ec, ac = F.col(f"e__{c}"), F.col(f"a__{c}")
+        diff = (ac - ec) if kinds[c] == "num" else none_d
+        parts.append(j.where(flags[c]).select(*key_cols, F.lit("value differs").alias("status"), F.lit(c).alias("column_name"),
+                                              ec.cast("string").alias("sas_value"), ac.cast("string").alias("dbx_value"),
+                                              diff.alias("difference")))
+    for side, cond in (("only in SAS", F.col("_in_a").isNull()), ("only in Databricks", F.col("_in_e").isNull())):
+        parts.append(j.where(cond).select(*key_cols, F.lit(side).alias("status"), none_s.alias("column_name"),
+                                          none_s.alias("sas_value"), none_s.alias("dbx_value"), none_d.alias("difference")))
+    return reduce(DataFrame.unionByName, parts)
 
 
 def _compare_unordered(exp, act, cols, kinds, opts, result: CompareResult) -> None:

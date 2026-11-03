@@ -168,7 +168,7 @@ def _tag(text: str) -> str:
     return re.sub(r"\W+", "_", text.lower()).strip("_")
 
 
-def run_cases_as_job(cases: list[ParityCase], spark, ws: JobWorkspace) -> list[CaseResult]:
+def run_cases_as_job(cases: list[ParityCase], spark, ws: JobWorkspace, review=None) -> list[CaseResult]:
     """Deploy each case's notebooks, run them all in one job run, compare the outputs they saved."""
     from ..runtime.context import SasContext
 
@@ -206,7 +206,8 @@ def run_cases_as_job(cases: list[ParityCase], spark, ws: JobWorkspace) -> list[C
                      "run_page_url": r.get("run_page_url"), "seconds": r.get("seconds")}
         if not r["ok"]:
             execution.update(title="job task", error=r.get("error"), traceback=r.get("traceback"))
-        comparisons = (compare_outputs(case, spark, lambda ds: reader.get(f"_RESULT.{outputs[ds].rsplit('.', 1)[1]}"))
+        comparisons = (compare_outputs(case, spark, lambda ds: reader.get(f"_RESULT.{outputs[ds].rsplit('.', 1)[1]}"),
+                                       review)
                        if r["ok"] else [])
         passed = r["ok"] and bool(comparisons) and all(c.passed for c in comparisons)
         evidence = case_evidence(case, conv, conv.notebook, spark, job_environment=env, output_tables=outputs)
